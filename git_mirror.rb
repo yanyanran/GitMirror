@@ -843,7 +843,7 @@ class MirrorMain
 
     # 最近更新的仓库优先级较高，从而更快地获取到更新
     t = Time.now.to_i
-    interval = t - last_commit_time
+    interval = t - last_commit_time # 计算当前时间与最后一次提交时间之间的时间间隔
     return old_pri + step if interval <= 0
 
     return old_pri + Math.cbrt(interval)
