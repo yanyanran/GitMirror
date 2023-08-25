@@ -2,13 +2,22 @@
 syntax = "proto3";
 
 service Coordinator {
-    rpc SayHello(HelloRequest) returns (HelloReply) {}
+    rpc SayHello(HelloRequest) returns (HelloResponse) {}
+    rpc HeartBeat(HeartBeatRequest) returns (HeartBeatResponse) {}
 }
 
-message HelloRequest {
-    string name = 1;
+message HelloRequest {   // worker-> server
+    string w_to_s_msg = 1;
 }
 
-message HelloReply {
-    string msg = 1;
+message HelloResponse {    // server-> worker
+    string s_to_w_msg = 1;
+    int32 workerID = 2;
+}
+
+message HeartBeatRequest {
+    int32 workerID = 1;
+}
+
+message HeartBeatResponse {
 }

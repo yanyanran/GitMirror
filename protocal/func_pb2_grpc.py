@@ -17,7 +17,12 @@ class CoordinatorStub(object):
         self.SayHello = channel.unary_unary(
                 '/Coordinator/SayHello',
                 request_serializer=func__pb2.HelloRequest.SerializeToString,
-                response_deserializer=func__pb2.HelloReply.FromString,
+                response_deserializer=func__pb2.HelloResponse.FromString,
+                )
+        self.HeartBeat = channel.unary_unary(
+                '/Coordinator/HeartBeat',
+                request_serializer=func__pb2.HeartBeatRequest.SerializeToString,
+                response_deserializer=func__pb2.HeartBeatResponse.FromString,
                 )
 
 
@@ -30,13 +35,24 @@ class CoordinatorServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def HeartBeat(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_CoordinatorServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'SayHello': grpc.unary_unary_rpc_method_handler(
                     servicer.SayHello,
                     request_deserializer=func__pb2.HelloRequest.FromString,
-                    response_serializer=func__pb2.HelloReply.SerializeToString,
+                    response_serializer=func__pb2.HelloResponse.SerializeToString,
+            ),
+            'HeartBeat': grpc.unary_unary_rpc_method_handler(
+                    servicer.HeartBeat,
+                    request_deserializer=func__pb2.HeartBeatRequest.FromString,
+                    response_serializer=func__pb2.HeartBeatResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -61,6 +77,23 @@ class Coordinator(object):
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/Coordinator/SayHello',
             func__pb2.HelloRequest.SerializeToString,
-            func__pb2.HelloReply.FromString,
+            func__pb2.HelloResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def HeartBeat(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/Coordinator/HeartBeat',
+            func__pb2.HeartBeatRequest.SerializeToString,
+            func__pb2.HeartBeatResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
