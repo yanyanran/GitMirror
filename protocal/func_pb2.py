@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nfunc.proto\"\x1c\n\x0cHelloRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"\x1d\n\nHelloReply\x12\x0f\n\x07message\x18\x01 \x01(\t27\n\x0b\x43oordinator\x12(\n\x08SayHello\x12\r.HelloRequest\x1a\x0b.HelloReply\"\x00\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nfunc.proto\"\x1c\n\x0cHelloRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"\x19\n\nHelloReply\x12\x0b\n\x03msg\x18\x01 \x01(\t27\n\x0b\x43oordinator\x12(\n\x08SayHello\x12\r.HelloRequest\x1a\x0b.HelloReply\"\x00\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -24,7 +24,7 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   _globals['_HELLOREQUEST']._serialized_start=14
   _globals['_HELLOREQUEST']._serialized_end=42
   _globals['_HELLOREPLY']._serialized_start=44
-  _globals['_HELLOREPLY']._serialized_end=73
-  _globals['_COORDINATOR']._serialized_start=75
-  _globals['_COORDINATOR']._serialized_end=130
+  _globals['_HELLOREPLY']._serialized_end=69
+  _globals['_COORDINATOR']._serialized_start=71
+  _globals['_COORDINATOR']._serialized_end=126
 # @@protoc_insertion_point(module_scope)

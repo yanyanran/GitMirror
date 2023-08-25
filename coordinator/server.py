@@ -5,12 +5,33 @@ import sys
 sys.path.append('../protocal/')
 import func_pb2
 import func_pb2_grpc
+from bitarray import bitarray
+
+BITMAP_MAX_NUM = 1000   # 管理worker的bitmap默认大小（从配置文件读/写死）
+bitmap = bitarray(BITMAP_MAX_NUM)
+
+# bitmap申请空闲id 
+def get_free_id(bitmap):
+    for i, allocated in enumerate(bitmap):
+        if not allocated:
+            bitmap[i] = True
+            return i
+    raise ValueError("No free ID available.")
+
+# bitmap释放占用id
+def release_id(bitmap, id):
+    if id < len(bitmap):
+        bitmap[id] = False
+    else:
+        raise ValueError("Invalid ID.")
 
 # 实现 proto 文件中定义的 Servicer
 class Coordinator(func_pb2_grpc.CoordinatorServicer):
     # 实现 proto 文件中定义的 rpc 调用
     def SayHello(self, request, context):
-        return func_pb2.HelloReply(message = 'hello {msg}'.format(msg = request.name))
+        worker_id = get_free_id(bitmap)
+        print("worker[%d]已连接!" %worker_id)
+        return func_pb2.HelloReply(msg = 'your worker_ID is  {msg}'.format(msg = request.name))
 
 def serve():
     # 启动 rpc 服务
