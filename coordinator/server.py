@@ -10,6 +10,7 @@ import func_pb2_grpc
 import yaml
 import pathlib
 import subprocess
+import hash_ring
 from bitarray import bitarray
 from dataclasses import dataclass
 
