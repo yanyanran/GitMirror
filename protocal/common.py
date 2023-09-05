@@ -1,0 +1,4 @@
+# 心跳事件类型
+NO_MORE = 0
+ADD_REPO = 1
+DELE_REPO = 2

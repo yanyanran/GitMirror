@@ -1,2 +1,3 @@
+coor_ip_addr: 10.30.0.159:5555
 upstream_repos_name: upstream-repos
 upstream_repos_url: https://gitee.com/compass-ci/upstream-repos.git

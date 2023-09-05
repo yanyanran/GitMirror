@@ -4,25 +4,32 @@ import grpc
 import os
 import threading
 import sys
-sys.path.append('../protocal/')
+sys.path.append('../protocal/')  # TODO：路径启动过于绝对
 import func_pb2
 import func_pb2_grpc
 import yaml
 import pathlib
 import subprocess
 import hash_ring
+import shelve
 from bitarray import bitarray
 from dataclasses import dataclass
+from typing import List
 
 @dataclass
 class Worker:
     worker_id: int
     heartBeatStep: int
     alive: bool
+    urls: List[str] # worker维护的url list
     # ...其他信息
+    # TODO：role: worker/aggregator、pub_ip_addr（aggregator）
 
 BITMAP_MAX_NUM = 1000   # 管理worker的bitmap默认大小（TODO：从配置文件读/写死）
 HEARTBEAT_INTERVAL = 10
+
+workersdb = shelve.open('workers.db')  
+db_lock = threading.Lock()
 
 workers = {}  # 存放所有worker（TODO：cache持久化）
 bitmap = bitarray(BITMAP_MAX_NUM)
@@ -47,14 +54,16 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
     # 实现 proto 文件中定义的 rpc 调用
     def SayHello(self, request, context):
         id = get_free_id(bitmap)
-        worker = Worker(worker_id = id, heartBeatStep = 0, alive = True)
+        worker = Worker(worker_id = id, heartBeatStep = 0, alive = True, urls=[])
         workers[id] = worker
         print(request.w_to_s_msg, end = " ")
         print("worker[%d]已连接!" %id)
+        with db_lock:
+            workersdb[str(id)] = worker
         return func_pb2.HelloResponse(s_to_w_msg = '【连接coordinator成功】your worker_ID is', workerID = id)
     
     def HeartBeat(self, request, context):
-        print("收到 work: ", request.workerID ,"的心跳")
+        print("收到 worker: ", request.workerID ,"的心跳")
         worker = workers.get(request.workerID)
         worker.heartBeatStep = 0
         # TODO：读写map需加锁（后期维护在coordinator类里）
@@ -73,6 +82,7 @@ def dealTimeout():
                 v.alive = False
                 release_id(bitmap, v.worker_id)
                 workers.pop(v.worker_id)    # TODO: worker全局不delete
+                del workersdb[str(v.worker_id)]
         time.sleep(5)
     
 # 读取配置文件               
@@ -84,8 +94,8 @@ def read_config_file():
         config = f.read()
         
     configMap = yaml.load(config,Loader=yaml.FullLoader)
-    repos_name=configMap.get('upstream_repos_name')
-    repos_url=configMap.get('upstream_repos_url')
+    repos_name = configMap.get('upstream_repos_name')
+    repos_url = configMap.get('upstream_repos_url')
 
     # 获取绝对路径
     reposPath = os.path.join(curPath, repos_name)
@@ -118,7 +128,7 @@ def read_config_file():
 
 # 判断网络连接问题
 def std_neterr(stderr):
-    err='failed: The TLS connection was non-properly terminated.'
+    err = 'failed: The TLS connection was non-properly terminated.'
     if err in stderr :
         return True
     else :
@@ -151,12 +161,16 @@ def startup():
     configMap = read_config_file()
     git_tree = build_git_tree(configMap)
     print(git_tree.get("a").get("abc"))
+    return configMap
 
-def rpc_serve():
+def coor_serve(configMap):
     # 启动 rpc 服务
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     func_pb2_grpc.add_CoordinatorServicer_to_server(Coordinator(), server)
-    server.add_insecure_port('[::]:50051')
+    
+    # 读取配置文件获取coor_ip
+    ip = configMap.get('coor_ip_addr')
+    server.add_insecure_port(ip)
     server.start()
     try:
         while True:
@@ -165,10 +179,14 @@ def rpc_serve():
         server.stop(0)
 
 def serve():
-    startup()
-    rpc_serve()
+    configMap = startup()
+    coor_serve(configMap)
 
 if __name__ == '__main__':
-    heartbeat=threading.Thread(target=dealTimeout)
+    heartbeat = threading.Thread(target=dealTimeout)
     heartbeat.start()
+    
+    mainLoop = threading.Thread(target=dealTimeout)
+    mainLoop.start()
+    
     serve()

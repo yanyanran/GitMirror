@@ -1,31 +1,57 @@
 import grpc
 import time
 import threading
+import os
+import yaml
 import sys
 sys.path.append('../protocal/')
 import func_pb2
 import func_pb2_grpc
 
 workerID = 0
+disk_path = '/'
 
 def HeartBeat(stub):
     while True:
-        stub.HeartBeat(func_pb2.HeartBeatRequest(workerID = workerID))
-        time.sleep(5)
+        try:
+            stub.HeartBeat(func_pb2.HeartBeatRequest(workerID = workerID))
+            time.sleep(5)
+        except grpc.RpcError as e:
+            if e.code() == grpc.StatusCode.UNAVAILABLE:
+                break
+            else:
+                print(f"gRPC Error: {e.details()}")
 
-def conn_to_coordinator():
-    channel = grpc.insecure_channel('localhost:50051') # 连接rpc server
-    stub = func_pb2_grpc.CoordinatorStub(channel) # 调用rpc服务
+# 读取配置文件
+def read_config_file():
+    curPath = os.path.dirname(os.path.realpath(__file__))
+    yamlPath = os.path.join(curPath, "config.yaml")
+    with open(yamlPath, 'r', encoding='utf-8') as f:
+        config = f.read()
+    configMap = yaml.load(config,Loader=yaml.FullLoader)
+    return configMap
+
+def conn_to_coordinator(configMap):
+    try:
+        coor_ip_addr = configMap.get('where_coor_ip_addr')
+        channel = grpc.insecure_channel(coor_ip_addr) # 连接rpc server
+        stub = func_pb2_grpc.CoordinatorStub(channel) # 调用rpc服务
+        response = stub.SayHello(func_pb2.HelloRequest(w_to_s_msg='【Worker Connected】'))
+        global workerID 
+        workerID = response.workerID
+        print(response.s_to_w_msg, end = " ")
+        print(workerID)
+    except grpc.RpcError as e:  # 处理gRPC异常
+            if e.code() == grpc.StatusCode.UNAVAILABLE:  # 服务器未启动
+                print("Error: gRPC Server is not available. Make sure the server is running.")
+            else: 
+                print(f"gRPC Error: {e.details()}")
     
-    response = stub.SayHello(func_pb2.HelloRequest(w_to_s_msg='【Worker Connected】'))
-    global workerID 
-    workerID = response.workerID
-    print(response.s_to_w_msg, end = " ")
-    print(workerID)
-    
+    # HeartBeat线程
     heartbeat = threading.Thread(target = HeartBeat,args = (stub,))
     heartbeat.start()
     
 
 if __name__ == '__main__':
-    conn_to_coordinator()
+    configMap = read_config_file()
+    conn_to_coordinator(configMap)
