@@ -9,6 +9,7 @@ import func_pb2
 import func_pb2_grpc
 import yaml
 import pathlib
+import uuid
 import subprocess
 import hash_ring
 import shelve
@@ -21,17 +22,20 @@ class Worker:
     worker_id: int
     heartBeatStep: int
     alive: bool
+    uuid: str
     urls: List[str] # worker维护的url list
     # ...其他信息
     # TODO：role: worker/aggregator、pub_ip_addr（aggregator）
 
 BITMAP_MAX_NUM = 1000   # 管理worker的bitmap默认大小（TODO：从配置文件读/写死）
-HEARTBEAT_INTERVAL = 10
+HEARTBEAT_INTERVAL = 4
+HEARTBEAT_DIEOUT = 8
 
 workersdb = shelve.open('workers.db')  
 db_lock = threading.Lock()
 
 workers = {}  # 存放所有worker（TODO：cache持久化）
+workers_map_lock = threading.Lock()
 bitmap = bitarray(BITMAP_MAX_NUM)
 
 # bitmap申请空闲id 
@@ -49,40 +53,73 @@ def release_id(bitmap, id):
     else:
         raise ValueError("Invalid ID.")
 
+# 处理定时更新上游urlrepos、...
+class mainLoop:
+    def checkHaveWorkerCache(self):
+        with db_lock:
+            if not workersdb:  # 等待10min-> worker连接
+                print('no cache!')
+                time.sleep(10)
+                
+            else: # 加载到内存中，然后等待10min进行状态重连
+                print('have cache!')
+                for k, v in workersdb.items():
+                    v.alive = False
+                    with workers_map_lock:
+                        workers[v.worker_id] = v
+                    bitmap[v.worker_id] = True
+                time.sleep(10)
+            
+    def mainLoop_serve(self):
+        print("start mainLoop_serve...")
+        self.checkHaveWorkerCache()
+
+
 # 实现 proto 文件中定义的 Servicer
 class Coordinator(func_pb2_grpc.CoordinatorServicer):
     # 实现 proto 文件中定义的 rpc 调用
     def SayHello(self, request, context):
-        id = get_free_id(bitmap)
-        worker = Worker(worker_id = id, heartBeatStep = 0, alive = True, urls=[])
-        workers[id] = worker
-        print(request.w_to_s_msg, end = " ")
+        old_workerID = request.workerID
+        with workers_map_lock:
+            if old_workerID in workers:
+                old_uuid = request.uuid
+                if old_uuid == workers[old_workerID].uuid:
+                    return func_pb2.HelloResponse(workerID = old_workerID, uuid = old_uuid)
+            id = get_free_id(bitmap)
+            worker = Worker(worker_id = id, heartBeatStep = 0, alive = True, uuid = str(uuid.uuid1()), urls=[])
+            workers[id] = worker
         print("worker[%d]已连接!" %id)
         with db_lock:
             workersdb[str(id)] = worker
-        return func_pb2.HelloResponse(s_to_w_msg = '【连接coordinator成功】your worker_ID is', workerID = id)
+        return func_pb2.HelloResponse(workerID = id, uuid = worker.uuid)
     
     def HeartBeat(self, request, context):
         print("收到 worker: ", request.workerID ,"的心跳")
-        worker = workers.get(request.workerID)
+        with workers_map_lock:
+            worker = workers.get(request.workerID)
         worker.heartBeatStep = 0
+        worker.alive = True
         # TODO：读写map需加锁（后期维护在coordinator类里）
         return func_pb2.HeartBeatResponse()
 
 def dealTimeout():
     while True:
-        tmp_workers = dict(workers)
+        with workers_map_lock:
+            tmp_workers = dict(workers)
         for v in tmp_workers.values():
-            #if v.alive == False:
-            #    continue
             v.heartBeatStep += 1 # TODO：读写map需加锁（后期维护在coordinator类里）
-            if v.heartBeatStep >= HEARTBEAT_INTERVAL:
+            if v.heartBeatStep == HEARTBEAT_INTERVAL:
                 print("【Worker Timeout】worker %d 连接超时!" %v.worker_id)
-                # TODO: 等待重连10min
                 v.alive = False
+                
+            if v.heartBeatStep >= HEARTBEAT_DIEOUT:
+                print("【Worker Dieout】worker %d 挂了!拜拜！" %v.worker_id)
+                # del hash
                 release_id(bitmap, v.worker_id)
-                workers.pop(v.worker_id)    # TODO: worker全局不delete
-                del workersdb[str(v.worker_id)]
+                with workers_map_lock:
+                   workers.pop(v.worker_id)    # TODO: worker全局不delete
+                with db_lock:
+                    del workersdb[str(v.worker_id)]
         time.sleep(5)
     
 # 读取配置文件               
@@ -155,8 +192,8 @@ def build_git_tree(configMap):
                     repo = f.read()
                     repoMap = yaml.load(repo,Loader=yaml.FullLoader)
                     repo_tree[item.name] = repoMap.get("url")
-    return git_tree           
-    
+    return git_tree                   
+        
 def startup():
     configMap = read_config_file()
     git_tree = build_git_tree(configMap)
@@ -186,7 +223,8 @@ if __name__ == '__main__':
     heartbeat = threading.Thread(target=dealTimeout)
     heartbeat.start()
     
-    mainLoop = threading.Thread(target=dealTimeout)
-    mainLoop.start()
+    mainLoop_serve = mainLoop()
+    eventLoop = threading.Thread(target=mainLoop_serve.mainLoop_serve)
+    eventLoop.start()
     
     serve()

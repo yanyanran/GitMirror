@@ -7,12 +7,14 @@ service Coordinator {
 }
 
 message HelloRequest {   // worker-> server
-    string w_to_s_msg = 1;
+    int32 workerID = 1;
+    string uuid = 2;
+
 }
 
 message HelloResponse {    // server-> worker
-    string s_to_w_msg = 1;
-    int32 workerID = 2;
+    int32 workerID = 1;
+    string uuid = 2;
 }
 
 message HeartBeatRequest {

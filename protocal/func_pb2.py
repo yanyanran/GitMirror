@@ -13,7 +13,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nfunc.proto\"\"\n\x0cHelloRequest\x12\x12\n\nw_to_s_msg\x18\x01 \x01(\t\"5\n\rHelloResponse\x12\x12\n\ns_to_w_msg\x18\x01 \x01(\t\x12\x10\n\x08workerID\x18\x02 \x01(\x05\"$\n\x10HeartBeatRequest\x12\x10\n\x08workerID\x18\x01 \x01(\x05\"\x13\n\x11HeartBeatResponse2p\n\x0b\x43oordinator\x12+\n\x08SayHello\x12\r.HelloRequest\x1a\x0e.HelloResponse\"\x00\x12\x34\n\tHeartBeat\x12\x11.HeartBeatRequest\x1a\x12.HeartBeatResponse\"\x00\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\nfunc.proto\".\n\x0cHelloRequest\x12\x10\n\x08workerID\x18\x01 \x01(\x05\x12\x0c\n\x04uuid\x18\x02 \x01(\t\"/\n\rHelloResponse\x12\x10\n\x08workerID\x18\x01 \x01(\x05\x12\x0c\n\x04uuid\x18\x02 \x01(\t\"$\n\x10HeartBeatRequest\x12\x10\n\x08workerID\x18\x01 \x01(\x05\"#\n\x11HeartBeatResponse\x12\x0e\n\x06status\x18\x01 \x01(\x05\"\x13\n\x11\x41\x64\x64RepoURLRequest\"5\n\x12\x41\x64\x64RepoURLResponse\x12\x10\n\x08workerID\x18\x01 \x01(\x05\x12\r\n\x05repos\x18\x02 \x03(\t\"\x14\n\x12\x44\x65leRepoURLRequest\"6\n\x13\x44\x65leRepoURLResponse\x12\x10\n\x08workerID\x18\x01 \x01(\x05\x12\r\n\x05repos\x18\x02 \x03(\t2p\n\x0b\x43oordinator\x12+\n\x08SayHello\x12\r.HelloRequest\x1a\x0e.HelloResponse\"\x00\x12\x34\n\tHeartBeat\x12\x11.HeartBeatRequest\x1a\x12.HeartBeatResponse\"\x00\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -22,13 +22,21 @@ if _descriptor._USE_C_DESCRIPTORS == False:
 
   DESCRIPTOR._options = None
   _globals['_HELLOREQUEST']._serialized_start=14
-  _globals['_HELLOREQUEST']._serialized_end=48
-  _globals['_HELLORESPONSE']._serialized_start=50
-  _globals['_HELLORESPONSE']._serialized_end=103
-  _globals['_HEARTBEATREQUEST']._serialized_start=105
-  _globals['_HEARTBEATREQUEST']._serialized_end=141
-  _globals['_HEARTBEATRESPONSE']._serialized_start=143
-  _globals['_HEARTBEATRESPONSE']._serialized_end=162
-  _globals['_COORDINATOR']._serialized_start=164
-  _globals['_COORDINATOR']._serialized_end=276
+  _globals['_HELLOREQUEST']._serialized_end=60
+  _globals['_HELLORESPONSE']._serialized_start=62
+  _globals['_HELLORESPONSE']._serialized_end=109
+  _globals['_HEARTBEATREQUEST']._serialized_start=111
+  _globals['_HEARTBEATREQUEST']._serialized_end=147
+  _globals['_HEARTBEATRESPONSE']._serialized_start=149
+  _globals['_HEARTBEATRESPONSE']._serialized_end=184
+  _globals['_ADDREPOURLREQUEST']._serialized_start=186
+  _globals['_ADDREPOURLREQUEST']._serialized_end=205
+  _globals['_ADDREPOURLRESPONSE']._serialized_start=207
+  _globals['_ADDREPOURLRESPONSE']._serialized_end=260
+  _globals['_DELEREPOURLREQUEST']._serialized_start=262
+  _globals['_DELEREPOURLREQUEST']._serialized_end=282
+  _globals['_DELEREPOURLRESPONSE']._serialized_start=284
+  _globals['_DELEREPOURLRESPONSE']._serialized_end=338
+  _globals['_COORDINATOR']._serialized_start=340
+  _globals['_COORDINATOR']._serialized_end=452
 # @@protoc_insertion_point(module_scope)
