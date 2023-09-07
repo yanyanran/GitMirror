@@ -7,15 +7,19 @@ import sys
 sys.path.append('../protocal/')  # TODO：路径启动过于绝对
 import func_pb2
 import func_pb2_grpc
+import common
 import yaml
 import pathlib
 import uuid
 import subprocess
 import hash_ring
 import shelve
+
 from bitarray import bitarray
 from dataclasses import dataclass
 from typing import List
+
+# 为每个worker维护一个添加url的缓冲区
 
 @dataclass
 class Worker:
@@ -27,6 +31,15 @@ class Worker:
     # ...其他信息
     # TODO：role: worker/aggregator、pub_ip_addr（aggregator）
 
+@dataclass
+class urlsArray:
+    # cache
+    add_urls: List[str]
+    del_urls: List[str]
+    
+    add_urls_lock = threading.Lock()
+    del_urls_lock = threading.Lock()
+
 BITMAP_MAX_NUM = 1000   # 管理worker的bitmap默认大小（TODO：从配置文件读/写死）
 HEARTBEAT_INTERVAL = 4
 HEARTBEAT_DIEOUT = 8
@@ -34,9 +47,17 @@ HEARTBEAT_DIEOUT = 8
 workersdb = shelve.open('workers.db')  
 db_lock = threading.Lock()
 
-workers = {}  # 存放所有worker（TODO：cache持久化）
+git_tree = {}
+git_tree_lock = threading.Lock()
+
+workers = {}  # 存放所有worker
 workers_map_lock = threading.Lock()
+
+urlsCache = {} # 存放worker被分配的urls（add
+
 bitmap = bitarray(BITMAP_MAX_NUM)
+
+hashring = hash_ring.HashRing()
 
 # bitmap申请空闲id 
 def get_free_id(bitmap):
@@ -55,25 +76,57 @@ def release_id(bitmap, id):
 
 # 处理定时更新上游urlrepos、...
 class mainLoop:
+    def build_git_tree(self, configMap):
+        curPath = os.path.dirname(os.path.realpath(__file__))
+        reposPath = os.path.join(curPath, configMap.get('upstream_repos_name'))
+        
+        with git_tree_lock:
+            for i in range(26):
+                letter = chr(i + 97)  # a-z
+                child_reposPath = os.path.join(reposPath, letter)
+                # print(child_reposPath)
+                dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
+                repo_tree = {}
+                git_tree[letter] = repo_tree
+                for item in dir_path.rglob('*'):
+                    if item.is_dir():
+                        repoPath = os.path.join(child_reposPath, item.name)  # b/bis
+                        repoPath = os.path.join(repoPath, item.name)  # b/bis/bis
+                        with open(repoPath, 'r', encoding='utf-8') as f:
+                            repo = f.read()
+                            repoMap = yaml.load(repo,Loader=yaml.FullLoader)
+                            repo_tree[item.name] = repoMap.get("url") 
+    
+    # 检查coor本地是否存有worker缓存
     def checkHaveWorkerCache(self):
         with db_lock:
-            if not workersdb:  # 等待10min-> worker连接
-                print('no cache!')
-                time.sleep(10)
-                
+            if not workersdb:  # 等待worker连接10min
+                print('no cache!')    
             else: # 加载到内存中，然后等待10min进行状态重连
                 print('have cache!')
                 for k, v in workersdb.items():
                     v.alive = False
+                    v.heartBeatStep = 0
                     with workers_map_lock:
                         workers[v.worker_id] = v
                     bitmap[v.worker_id] = True
-                time.sleep(10)
+                    array = urlsArray(add_urls=[], del_urls=[])
+                    urlsCache[v.worker_id] = array 
+        
+    def init_hashring(self):
+         for value in workers.values():
+            node = value.worker_id
+            hashring.add_node(node)  # 添加workerID到环上作为ring node
             
     def mainLoop_serve(self):
+        self.build_git_tree(configMap)
+        #print(git_tree.get("a").get("abc"))
+        print('git_tree build ok!')
         print("start mainLoop_serve...")
-        self.checkHaveWorkerCache()
-
+        self.init_hashring()
+        hash_distribute_urls()
+        while True:
+            i = 0
 
 # 实现 proto 文件中定义的 Servicer
 class Coordinator(func_pb2_grpc.CoordinatorServicer):
@@ -86,9 +139,15 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
                 if old_uuid == workers[old_workerID].uuid:
                     return func_pb2.HelloResponse(workerID = old_workerID, uuid = old_uuid)
             id = get_free_id(bitmap)
+            
             worker = Worker(worker_id = id, heartBeatStep = 0, alive = True, uuid = str(uuid.uuid1()), urls=[])
             workers[id] = worker
+        array = urlsArray(add_urls=[], del_urls=[])
+        urlsCache[id] = array 
+            
         print("worker[%d]已连接!" %id)
+        hashring.add_node(id)
+        hash_distribute_urls()
         with db_lock:
             workersdb[str(id)] = worker
         return func_pb2.HelloResponse(workerID = id, uuid = worker.uuid)
@@ -99,10 +158,19 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
             worker = workers.get(request.workerID)
         worker.heartBeatStep = 0
         worker.alive = True
-        # TODO：读写map需加锁（后期维护在coordinator类里）
-        return func_pb2.HeartBeatResponse()
+        with urlsCache[request.workerID].add_urls_lock:
+            with urlsCache[request.workerID].del_urls_lock:
+                add_arr =  list(urlsCache[request.workerID].add_urls)
+                del_arr =  list(urlsCache[request.workerID].del_urls)
+                urlsCache[request.workerID].add_urls.clear()
+                urlsCache[request.workerID].del_urls.clear()
+        if not add_arr and not del_arr :
+            return func_pb2.HeartBeatResponse(status=0,add_repos=add_arr,del_repos=del_arr)
+
+        return func_pb2.HeartBeatResponse(status=common.ADD_DEL_REPO,add_repos=add_arr,del_repos=del_arr)
 
 def dealTimeout():
+    print('start deal heartbeat...')
     while True:
         with workers_map_lock:
             tmp_workers = dict(workers)
@@ -114,16 +182,19 @@ def dealTimeout():
                 
             if v.heartBeatStep >= HEARTBEAT_DIEOUT:
                 print("【Worker Dieout】worker %d 挂了!拜拜！" %v.worker_id)
-                # del hash
+                hashring.remove_node(v.worker_id)
+                hash_distribute_urls()
                 release_id(bitmap, v.worker_id)
                 with workers_map_lock:
                    workers.pop(v.worker_id)    # TODO: worker全局不delete
                 with db_lock:
                     del workersdb[str(v.worker_id)]
+                del urlsCache[v.worker_id]
         time.sleep(5)
     
 # 读取配置文件               
 def read_config_file():
+    print('start read config file...')
     curPath = os.path.dirname(os.path.realpath(__file__))
     yamlPath = os.path.join(curPath, "config.yaml")
     
@@ -138,7 +209,7 @@ def read_config_file():
     reposPath = os.path.join(curPath, repos_name)
     while True:
         if os.path.exists(reposPath) == False:
-            print("文件不存在！")
+            print("upsteam仓库不存在!")
             command = "git clone %s" % repos_url
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             if result.returncode != 0:
@@ -148,66 +219,58 @@ def read_config_file():
                     continue
             print("upstream仓库克隆成功! ")
         else:
-            print("文件存在！")
+            print("upsteam仓库存在!")
             command = "cd %s && git pull" % reposPath
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             # git pull错误情况解析判断
             # 1、网断：隔一段时间反复重试
             # 2、git_url失效：删除原来的本地仓库、重新读取配置文件获取最新url、重新clone
             if result.returncode != 0:
+                print(result.stdout)
                 if std_neterr(result.stdout):
                     continue
                 else:
-                    os.remove(reposPath)
+                    print(command)
+                    os.system(command)
                     continue
        
         return configMap
 
+# 根据hashring, 遍历git_tree开始分配url到每个worker的cache上
+# TODO 后续：(add)upstream repo有更新，增/减repo
+#           有worker挂掉，将repo分配给其他worker
+#           (del)有worker恢复
+def hash_distribute_urls():
+    with git_tree_lock:
+        for i in range(26):
+            letter = chr(i + 97)
+            sub_tree = git_tree.get(letter)
+            for k, urls in sub_tree.items():
+                for url in urls:
+                    nodeID = hashring.get_urls_node(k)
+                    if nodeID==-1:
+                        break
+                    with urlsCache[nodeID].add_urls_lock:
+                        urlsCache[nodeID].add_urls.append(url)   
+
 # 判断网络连接问题
 def std_neterr(stderr):
     err = 'failed: The TLS connection was non-properly terminated.'
+    err2 = 'Could not resolve host: gitee.com'
     if err in stderr :
         return True
-    else :
-        return False 
-       
-def build_git_tree(configMap):
-    git_tree = {}
-    curPath = os.path.dirname(os.path.realpath(__file__))
-    reposPath = os.path.join(curPath, configMap.get('upstream_repos_name'))
-    
-    for i in range(26):
-        letter = chr(i + 97)
-        child_reposPath = os.path.join(reposPath, letter)
-        # print(child_reposPath)
-        dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
-        
-        repo_tree = {}
-        git_tree[letter] = repo_tree
-        for item in dir_path.rglob('*'):
-            if item.is_dir():
-                repoPath = os.path.join(child_reposPath, item.name)  # b/bis
-                repoPath = os.path.join(repoPath, item.name)  # b/bis/bis
-                with open(repoPath, 'r', encoding='utf-8') as f:
-                    repo = f.read()
-                    repoMap = yaml.load(repo,Loader=yaml.FullLoader)
-                    repo_tree[item.name] = repoMap.get("url")
-    return git_tree                   
-        
-def startup():
-    configMap = read_config_file()
-    git_tree = build_git_tree(configMap)
-    print(git_tree.get("a").get("abc"))
-    return configMap
+    elif err2 in stderr:
+        return True
+    else:
+        return False
 
-def coor_serve(configMap):
+def coor_serve(ipaddr):
+    print('start rpc...')
     # 启动 rpc 服务
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
     func_pb2_grpc.add_CoordinatorServicer_to_server(Coordinator(), server)
     
-    # 读取配置文件获取coor_ip
-    ip = configMap.get('coor_ip_addr')
-    server.add_insecure_port(ip)
+    server.add_insecure_port(ipaddr)
     server.start()
     try:
         while True:
@@ -215,16 +278,19 @@ def coor_serve(configMap):
     except KeyboardInterrupt:
         server.stop(0)
 
-def serve():
-    configMap = startup()
-    coor_serve(configMap)
-
-if __name__ == '__main__':
+def serve(ipaddr):
     heartbeat = threading.Thread(target=dealTimeout)
     heartbeat.start()
     
-    mainLoop_serve = mainLoop()
-    eventLoop = threading.Thread(target=mainLoop_serve.mainLoop_serve)
-    eventLoop.start()
+    coor_serve(ipaddr)
+
+if __name__ == '__main__':
+    configMap = read_config_file()
     
-    serve()
+    mainLoop_serve = mainLoop()
+    mainLoop_serve.checkHaveWorkerCache()
+    
+    serve_startup = threading.Thread(target=serve, args=(configMap.get('coor_ip_addr'),))
+    serve_startup.start()
+    
+    mainLoop_serve.mainLoop_serve()

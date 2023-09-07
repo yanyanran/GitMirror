@@ -22,21 +22,7 @@ message HeartBeatRequest {
 }
 
 message HeartBeatResponse {
-    int32 status = 1;  // 0-无事发生，1-add repo，2-delete repo
-}
-
-message AddRepoURLRequest {
-}
-
-message AddRepoURLResponse {
-    int32 workerID = 1;
-    repeated string repos = 2;  // 数组
-}
-
-message DeleRepoURLRequest {
-}
-
-message DeleRepoURLResponse {
-    int32 workerID = 1;
-    repeated string repos = 2;
+    int32 status = 1;  // 0-无事发生，1-add/del repo
+    repeated string add_repos = 2;  // 数组
+    repeated string del_repos = 3;
 }

@@ -4,10 +4,12 @@ import threading
 import os
 import yaml
 import shelve
+from concurrent import futures
 import sys
 sys.path.append('../protocal/')
 import func_pb2
 import func_pb2_grpc
+import common
 from dataclasses import dataclass
 from typing import List
 
@@ -20,18 +22,44 @@ class selfWorker:
 
 workerID = 0
 disk_path = '/'
+worker = selfWorker(worker_id=-1,uuid='',urls=[])
 selfdb = shelve.open('self.db')  
 
-def HeartBeat(stub):
+def add_repo(add_repos):
+    for v in add_repos:
+        if v in worker.urls :
+            print(v," is cloned")
+        else:
+            print(v)
+            worker.urls.append(v)
+    for v in worker.urls:
+        if v not in add_repos :
+            print("remove ",v)
+            worker.urls.remove(v)
+    
+    selfdb["worker"] = worker
+    
+def del_repo(del_repos):
+    for v in del_repos:
+        print(v)
+
+def HeartBeat(stub, threadPool):
     while True:
         try:
-            stub.HeartBeat(func_pb2.HeartBeatRequest(workerID = workerID))
+            res = stub.HeartBeat(func_pb2.HeartBeatRequest(workerID = workerID))
+            if res.status == common.ADD_DEL_REPO:
+                if res.add_repos:  # add_repos为空
+                    threadPool.submit(add_repo,res.add_repos)
+                if res.del_repos:
+                    threadPool.submit(del_repo,res.del_repos)
+                
             time.sleep(5)
         except grpc.RpcError as e:
             if e.code() == grpc.StatusCode.UNAVAILABLE:
                 break
             else:
                 print(f"gRPC Error: {e.details()}")
+                break
 
 # 读取配置文件
 def read_config_file():
@@ -47,9 +75,8 @@ def conn_to_coordinator(configMap):
         coor_ip_addr = configMap.get('where_coor_ip_addr')
         channel = grpc.insecure_channel(coor_ip_addr) # 连接rpc server
         stub = func_pb2_grpc.CoordinatorStub(channel) # 调用rpc服务
-        if not selfdb:
-            worker = selfWorker(worker_id = -1, uuid = "", urls=[]) 
-        else :
+        if  selfdb: 
+            global worker
             worker = selfdb["worker"]
         response = stub.SayHello(func_pb2.HelloRequest(workerID=worker.worker_id,uuid=worker.uuid))
         global workerID 
@@ -57,6 +84,8 @@ def conn_to_coordinator(configMap):
             workerID = response.workerID
             worker.worker_id = response.workerID
             worker.uuid = response.uuid
+            # TODO del old repos前添加一个操作：
+            
             # TODO DEL old repos
             worker.urls = []
         selfdb["worker"] = worker
@@ -67,12 +96,14 @@ def conn_to_coordinator(configMap):
             else: 
                 print(f"gRPC Error: {e.details()}")
     
+    # 添加线程池
+    threadPool = futures.ThreadPoolExecutor(max_workers=10)
+
     # HeartBeat线程
-    heartbeat = threading.Thread(target = HeartBeat,args = (stub,))
+    heartbeat = threading.Thread(target = HeartBeat,args = (stub,threadPool))
     heartbeat.start()
-    
-    # 添加线程池处理
-    
+    while True:
+        i=0
 
     
 
