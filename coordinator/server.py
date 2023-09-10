@@ -137,6 +137,7 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
             if old_workerID in workers:
                 old_uuid = request.uuid
                 if old_uuid == workers[old_workerID].uuid:
+                    workers[old_workerID].heartBeatStep = 0
                     return func_pb2.HelloResponse(workerID = old_workerID, uuid = old_uuid)
             id = get_free_id(bitmap)
             

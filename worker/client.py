@@ -21,21 +21,24 @@ class selfWorker:
     # ...其他信息
 
 workerID = 0
-disk_path = '/'
+disk_path = ' '
 worker = selfWorker(worker_id=-1,uuid='',urls=[])
 selfdb = shelve.open('self.db')  
 
 def add_repo(add_repos):
+    i=0
     for v in add_repos:
         if v in worker.urls :
-            print(v," is cloned")
+            #print(v," is cloned")
+            i=1
         else:
-            print(v)
+            #print(v)
             worker.urls.append(v)
     for v in worker.urls:
         if v not in add_repos :
             print("remove ",v)
             worker.urls.remove(v)
+            # TODO 命令行rm本地仓库
     
     selfdb["worker"] = worker
     
@@ -46,6 +49,7 @@ def del_repo(del_repos):
 def HeartBeat(stub, threadPool):
     while True:
         try:
+            #print('send heartBeat id: ', workerID)
             res = stub.HeartBeat(func_pb2.HeartBeatRequest(workerID = workerID))
             if res.status == common.ADD_DEL_REPO:
                 if res.add_repos:  # add_repos为空
@@ -71,15 +75,16 @@ def read_config_file():
     return configMap
 
 def conn_to_coordinator(configMap):
+    global worker
+    global workerID 
     try:
         coor_ip_addr = configMap.get('where_coor_ip_addr')
         channel = grpc.insecure_channel(coor_ip_addr) # 连接rpc server
         stub = func_pb2_grpc.CoordinatorStub(channel) # 调用rpc服务
-        if  selfdb: 
-            global worker
+        if selfdb: 
             worker = selfdb["worker"]
+            workerID = worker.worker_id
         response = stub.SayHello(func_pb2.HelloRequest(workerID=worker.worker_id,uuid=worker.uuid))
-        global workerID 
         if response.uuid != worker.uuid:
             workerID = response.workerID
             worker.worker_id = response.workerID
