@@ -214,7 +214,7 @@ def read_config_file():
             command = "git clone %s" % repos_url
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             if result.returncode != 0:
-                if std_neterr(result.stderr):
+                if common.std_neterr(result.stderr):
                     print("upstream仓库克隆失败.... ")
                     time.sleep(2)
                     continue
@@ -227,12 +227,7 @@ def read_config_file():
             # 1、网断：隔一段时间反复重试
             # 2、git_url失效：删除原来的本地仓库、重新读取配置文件获取最新url、重新clone
             if result.returncode != 0:
-                print(result.stdout)
-                if std_neterr(result.stdout):
-                    continue
-                else:
-                    print(command)
-                    os.system(command)
+                if common.std_neterr(result.stdout):
                     continue
        
         return configMap
@@ -253,17 +248,6 @@ def hash_distribute_urls():
                         break
                     with urlsCache[nodeID].add_urls_lock:
                         urlsCache[nodeID].add_urls.append(url)   
-
-# 判断网络连接问题
-def std_neterr(stderr):
-    err = 'failed: The TLS connection was non-properly terminated.'
-    err2 = 'Could not resolve host: gitee.com'
-    if err in stderr :
-        return True
-    elif err2 in stderr:
-        return True
-    else:
-        return False
 
 def coor_serve(ipaddr):
     print('start rpc...')
