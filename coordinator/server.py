@@ -4,22 +4,20 @@ import grpc
 import os
 import threading
 import sys
+import uuid
+import subprocess
+import shelve
+import yaml
+import pathlib
+from dataclasses import dataclass
+from typing import List
+from bitarray import bitarray
+import hash_ring
+import sys
 sys.path.append('../protocal/')  # TODO：路径启动过于绝对
 import func_pb2
 import func_pb2_grpc
 import common
-import yaml
-import pathlib
-import uuid
-import subprocess
-import hash_ring
-import shelve
-
-from bitarray import bitarray
-from dataclasses import dataclass
-from typing import List
-
-# 为每个worker维护一个添加url的缓冲区
 
 @dataclass
 class Worker:
@@ -27,67 +25,56 @@ class Worker:
     heartBeatStep: int
     alive: bool
     uuid: str
-    urls: List[str] # worker维护的url list
-    # ...其他信息
-    # TODO：role: worker/aggregator、pub_ip_addr（aggregator）
+    urls: List[str]
 
 @dataclass
-class urlsArray:
-    # cache
+class UrlsArray:
     add_urls: List[str]
     del_urls: List[str]
-    
-    add_urls_lock = threading.Lock()
-    del_urls_lock = threading.Lock()
+    add_urls_lock: threading.Lock
+    del_urls_lock: threading.Lock
 
-BITMAP_MAX_NUM = 1000   # 管理worker的bitmap默认大小（TODO：从配置文件读/写死）
-HEARTBEAT_INTERVAL = 4
-HEARTBEAT_DIEOUT = 8
+class CoordinatorServer:
+    def __init__(self,config_map):
+        self.BITMAP_MAX_NUM = 1000
+        self.HEARTBEAT_INTERVAL = 4
+        self.HEARTBEAT_DIEOUT = 8
+        self.bitmap = bitarray(self.BITMAP_MAX_NUM)
+        self.workers = {}
+        self.urls_cache = {}
+        self.git_tree = {}
+        self.hashring = hash_ring.HashRing()
+        self.workers_db = shelve.open('workers.db')
+        self.db_lock = threading.Lock()
+        self.git_tree_lock = threading.Lock()
+        self.workers_map_lock = threading.Lock()
+        self.config_map = config_map
 
-workersdb = shelve.open('workers.db')  
-db_lock = threading.Lock()
+    def get_free_id(self):
+        for i, allocated in enumerate(self.bitmap):
+            if not allocated:
+                self.bitmap[i] = True
+                return i
+        raise ValueError("No free ID available.")
 
-git_tree = {}
-git_tree_lock = threading.Lock()
+    def release_id(self, id):
+        if id < len(self.bitmap):
+            self.bitmap[id] = False
+        else:
+            raise ValueError("Invalid ID.")
 
-workers = {}  # 存放所有worker
-workers_map_lock = threading.Lock()
-
-urlsCache = {} # 存放worker被分配的urls（add
-
-bitmap = bitarray(BITMAP_MAX_NUM)
-
-hashring = hash_ring.HashRing()
-
-# bitmap申请空闲id 
-def get_free_id(bitmap):
-    for i, allocated in enumerate(bitmap):
-        if not allocated:
-            bitmap[i] = True
-            return i
-    raise ValueError("No free ID available.")
-
-# bitmap释放占用id
-def release_id(bitmap, id):
-    if id < len(bitmap):
-        bitmap[id] = False
-    else:
-        raise ValueError("Invalid ID.")
-
-# 处理定时更新上游urlrepos、...
-class mainLoop:
-    def build_git_tree(self, configMap):
+    def build_git_tree(self):
         curPath = os.path.dirname(os.path.realpath(__file__))
-        reposPath = os.path.join(curPath, configMap.get('upstream_repos_name'))
+        reposPath = os.path.join(curPath, self.config_map.get('upstream_repos_name'))
         
-        with git_tree_lock:
+        with self.git_tree_lock:
             for i in range(26):
                 letter = chr(i + 97)  # a-z
                 child_reposPath = os.path.join(reposPath, letter)
                 # print(child_reposPath)
                 dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
                 repo_tree = {}
-                git_tree[letter] = repo_tree
+                self.git_tree[letter] = repo_tree
                 for item in dir_path.rglob('*'):
                     if item.is_dir():
                         repoPath = os.path.join(child_reposPath, item.name)  # b/bis
@@ -95,104 +82,137 @@ class mainLoop:
                         with open(repoPath, 'r', encoding='utf-8') as f:
                             repo = f.read()
                             repoMap = yaml.load(repo,Loader=yaml.FullLoader)
-                            repo_tree[item.name] = repoMap.get("url") 
-    
+                            repo_tree[item.name] = repoMap.get("url")    
+
     # 检查coor本地是否存有worker缓存
     def checkHaveWorkerCache(self):
-        with db_lock:
-            if not workersdb:  # 等待worker连接10min
+        with self.db_lock:
+            if not self.workers_db:  # 等待worker连接10min
                 print('no cache!')    
             else: # 加载到内存中，然后等待10min进行状态重连
                 print('have cache!')
-                for k, v in workersdb.items():
+                for k, v in self.workers_db.items():
                     v.alive = False
                     v.heartBeatStep = 0
-                    with workers_map_lock:
-                        workers[v.worker_id] = v
-                    bitmap[v.worker_id] = True
-                    array = urlsArray(add_urls=[], del_urls=[])
-                    urlsCache[v.worker_id] = array 
+                    with self.workers_map_lock:
+                        self.workers[v.worker_id] = v
+                    self.bitmap[v.worker_id] = True
+                    array = UrlsArray(add_urls=[], del_urls=[],add_urls_lock= threading.Lock(),del_urls_lock= threading.Lock())
+                    self.urls_cache[v.worker_id] = array 
         
     def init_hashring(self):
-         for value in workers.values():
+         for value in self.workers.values():
             node = value.worker_id
-            hashring.add_node(node)  # 添加workerID到环上作为ring node
+            self.hashring.add_node(node)  # 添加workerID到环上作为ring node
             
     def mainLoop_serve(self):
-        self.build_git_tree(configMap)
+        self.build_git_tree()
         #print(git_tree.get("a").get("abc"))
         print('git_tree build ok!')
         print("start mainLoop_serve...")
         self.init_hashring()
-        hash_distribute_urls()
+        self.hash_distribute_urls()
         while True:
-            i = 0
+            i = 0    
 
-# 实现 proto 文件中定义的 Servicer
+    def serve(self, ipaddr):
+        heartbeat = threading.Thread(target=self.deal_timeout)
+        heartbeat.start()
+        self.coor_serve(ipaddr)
+
+    def coor_serve(self, ipaddr):
+        print('start rpc...')
+        server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+        func_pb2_grpc.add_CoordinatorServicer_to_server(Coordinator(self), server)
+        server.add_insecure_port(ipaddr)
+        server.start()
+        try:
+            while True:
+                time.sleep(60*60*24)
+        except KeyboardInterrupt:
+            server.stop(0)
+
+# 根据hashring, 遍历git_tree开始分配url到每个worker的cache上
+# TODO 后续：(add)upstream repo有更新，增/减repo
+#           有worker挂掉，将repo分配给其他worker
+#           (del)有worker恢复
+    def hash_distribute_urls(self):
+        with self.git_tree_lock:
+            for i in range(26):
+                letter = chr(i + 97)
+                sub_tree = self.git_tree.get(letter)
+                for k, urls in sub_tree.items():
+                    for url in urls:
+                        nodeID = self.hashring.get_urls_node(k)
+                        if nodeID==-1:
+                            break
+                        with self.urls_cache[nodeID].add_urls_lock:
+                            self.urls_cache[nodeID].add_urls.append(url)  
+
+    def deal_timeout(self):
+        while True:
+            with self.workers_map_lock:
+                tmp_workers = dict(self.workers)
+            for v in tmp_workers.values():
+                v.heartBeatStep += 1 # TODO：读写map需加锁（后期维护在coordinator类里）
+                if v.heartBeatStep == self.HEARTBEAT_INTERVAL:
+                    print(f"【Worker Timeout】worker {v.worker_id} 连接超时!")
+                    v.alive = False
+                if v.heartBeatStep >= self.HEARTBEAT_DIEOUT:
+                    print(f"【Worker Dieout】worker {v.worker_id} 挂了!拜拜！")
+                    self.hashring.remove_node(v.worker_id)
+                    self.hash_distribute_urls()
+                    self.release_id(v.worker_id)
+                    with self.workers_map_lock:
+                        self.workers.pop(v.worker_id)    # TODO: worker全局不delete
+                    with self.db_lock:
+                        del self.workers_db[str(v.worker_id)]
+                    del self.urls_cache[v.worker_id]
+            time.sleep(5)
+
 class Coordinator(func_pb2_grpc.CoordinatorServicer):
-    # 实现 proto 文件中定义的 rpc 调用
+    def __init__(self, server):
+        self.server = server
+        
     def SayHello(self, request, context):
         old_workerID = request.workerID
-        with workers_map_lock:
-            if old_workerID in workers:
+        with self.server.workers_map_lock:
+            if old_workerID in self.server.workers:
                 old_uuid = request.uuid
-                if old_uuid == workers[old_workerID].uuid:
-                    workers[old_workerID].heartBeatStep = 0
+                if old_uuid == self.server.workers[old_workerID].uuid:
+                    self.server.workers[old_workerID].heartBeatStep = 0
                     return func_pb2.HelloResponse(workerID = old_workerID, uuid = old_uuid)
-            id = get_free_id(bitmap)
+            id = self.server.get_free_id()
             
             worker = Worker(worker_id = id, heartBeatStep = 0, alive = True, uuid = str(uuid.uuid1()), urls=[])
-            workers[id] = worker
-        array = urlsArray(add_urls=[], del_urls=[])
-        urlsCache[id] = array 
+            self.server.workers[id] = worker
+        array = UrlsArray(add_urls=[], del_urls=[],add_urls_lock= threading.Lock(),del_urls_lock= threading.Lock())
+        self.server.urls_cache[id] = array 
             
         print("worker[%d]已连接!" %id)
-        hashring.add_node(id)
-        hash_distribute_urls()
-        with db_lock:
-            workersdb[str(id)] = worker
+        self.server.hashring.add_node(id)
+        self.server.hash_distribute_urls()
+        with self.server.db_lock:
+            self.server.workers_db[str(id)] = worker
         return func_pb2.HelloResponse(workerID = id, uuid = worker.uuid)
     
     def HeartBeat(self, request, context):
         print("收到 worker: ", request.workerID ,"的心跳")
-        with workers_map_lock:
-            worker = workers.get(request.workerID)
+        with self.server.workers_map_lock:
+            worker = self.server.workers.get(request.workerID)
         worker.heartBeatStep = 0
         worker.alive = True
-        with urlsCache[request.workerID].add_urls_lock:
-            with urlsCache[request.workerID].del_urls_lock:
-                add_arr =  list(urlsCache[request.workerID].add_urls)
-                del_arr =  list(urlsCache[request.workerID].del_urls)
-                urlsCache[request.workerID].add_urls.clear()
-                urlsCache[request.workerID].del_urls.clear()
+        with self.server.urls_cache[request.workerID].add_urls_lock:
+            with self.server.urls_cache[request.workerID].del_urls_lock:
+                add_arr =  list(self.server.urls_cache[request.workerID].add_urls)
+                del_arr =  list(self.server.urls_cache[request.workerID].del_urls)
+                self.server.urls_cache[request.workerID].add_urls.clear()
+                self.server.urls_cache[request.workerID].del_urls.clear()
         if not add_arr and not del_arr :
             return func_pb2.HeartBeatResponse(status=0,add_repos=add_arr,del_repos=del_arr)
 
         return func_pb2.HeartBeatResponse(status=common.ADD_DEL_REPO,add_repos=add_arr,del_repos=del_arr)
 
-def dealTimeout():
-    print('start deal heartbeat...')
-    while True:
-        with workers_map_lock:
-            tmp_workers = dict(workers)
-        for v in tmp_workers.values():
-            v.heartBeatStep += 1 # TODO：读写map需加锁（后期维护在coordinator类里）
-            if v.heartBeatStep == HEARTBEAT_INTERVAL:
-                print("【Worker Timeout】worker %d 连接超时!" %v.worker_id)
-                v.alive = False
-                
-            if v.heartBeatStep >= HEARTBEAT_DIEOUT:
-                print("【Worker Dieout】worker %d 挂了!拜拜！" %v.worker_id)
-                hashring.remove_node(v.worker_id)
-                hash_distribute_urls()
-                release_id(bitmap, v.worker_id)
-                with workers_map_lock:
-                   workers.pop(v.worker_id)    # TODO: worker全局不delete
-                with db_lock:
-                    del workersdb[str(v.worker_id)]
-                del urlsCache[v.worker_id]
-        time.sleep(5)
-    
 # 读取配置文件               
 def read_config_file():
     print('start read config file...')
@@ -232,50 +252,12 @@ def read_config_file():
        
         return configMap
 
-# 根据hashring, 遍历git_tree开始分配url到每个worker的cache上
-# TODO 后续：(add)upstream repo有更新，增/减repo
-#           有worker挂掉，将repo分配给其他worker
-#           (del)有worker恢复
-def hash_distribute_urls():
-    with git_tree_lock:
-        for i in range(26):
-            letter = chr(i + 97)
-            sub_tree = git_tree.get(letter)
-            for k, urls in sub_tree.items():
-                for url in urls:
-                    nodeID = hashring.get_urls_node(k)
-                    if nodeID==-1:
-                        break
-                    with urlsCache[nodeID].add_urls_lock:
-                        urlsCache[nodeID].add_urls.append(url)   
-
-def coor_serve(ipaddr):
-    print('start rpc...')
-    # 启动 rpc 服务
-    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
-    func_pb2_grpc.add_CoordinatorServicer_to_server(Coordinator(), server)
-    
-    server.add_insecure_port(ipaddr)
-    server.start()
-    try:
-        while True:
-            time.sleep(60*60*24) # one day in seconds
-    except KeyboardInterrupt:
-        server.stop(0)
-
-def serve(ipaddr):
-    heartbeat = threading.Thread(target=dealTimeout)
-    heartbeat.start()
-    
-    coor_serve(ipaddr)
-
 if __name__ == '__main__':
-    configMap = read_config_file()
+    config_map = read_config_file()
+    server = CoordinatorServer(config_map)
+    server.checkHaveWorkerCache()
     
-    mainLoop_serve = mainLoop()
-    mainLoop_serve.checkHaveWorkerCache()
-    
-    serve_startup = threading.Thread(target=serve, args=(configMap.get('coor_ip_addr'),))
+    serve_startup = threading.Thread(target=server.serve,args=(config_map.get('coor_ip_addr'),))
+
     serve_startup.start()
-    
-    mainLoop_serve.mainLoop_serve()
+    server.mainLoop_serve()
