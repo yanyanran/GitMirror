@@ -41,7 +41,7 @@ class CoordinatorServer:
         self.HEARTBEAT_DIEOUT = 8
         self.bitmap = bitarray(self.BITMAP_MAX_NUM)
         self.workers = {}
-        self.urls_cache = {}
+        self.urls_cache = {}  # send urls cache
         self.git_tree = {}
         self.hashring = hash_ring.HashRing()
         self.workers_db = shelve.open('workers.db')
@@ -147,7 +147,21 @@ class CoordinatorServer:
                         if nodeID==-1:
                             break
                         with self.urls_cache[nodeID].add_urls_lock:
-                            self.urls_cache[nodeID].add_urls.append(url)  
+                            self.urls_cache[nodeID].add_urls.append(url) 
+    
+    # 每次重连，coor向worker发送所属worker维护的urls                      
+    def send_hash_urls(self, workerID):
+        with self.git_tree_lock:
+            for i in range(26):
+                letter = chr(i + 97)
+                sub_tree = self.git_tree.get(letter)
+                for k, urls in sub_tree.items():
+                    for url in urls:
+                        nodeID = self.hashring.get_urls_node(k)
+                        if nodeID == -1 or nodeID != workerID:
+                            break
+                        with self.urls_cache[nodeID].add_urls_lock:
+                            self.urls_cache[nodeID].add_urls.append(url) 
 
     def deal_timeout(self):
         while True:
@@ -175,12 +189,18 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
         self.server = server
         
     def SayHello(self, request, context):
-        old_workerID = request.workerID
+        old_workerID = request.workerID       
         with self.server.workers_map_lock:
             if old_workerID in self.server.workers:
                 old_uuid = request.uuid
-                if old_uuid == self.server.workers[old_workerID].uuid:
+                if old_uuid == self.server.workers[old_workerID].uuid:  # worker重连
                     self.server.workers[old_workerID].heartBeatStep = 0
+                    if old_workerID in self.server.urls_cache:
+                        l = self.server.urls_cache[old_workerID]
+                        if (len(l.add_urls)!= 0 or len(l.del_urls)!= 0):
+                            pass
+                        else:  # map is empty
+                            self.server.send_hash_urls(old_workerID)
                     return func_pb2.HelloResponse(workerID = old_workerID, uuid = old_uuid)
             id = self.server.get_free_id()
             

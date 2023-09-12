@@ -15,3 +15,19 @@ def std_neterr(stderr):
         return True
     else:
         return False
+
+# clone-1 ; neterr-True ; other-False
+def std_cloneerr(stderr):
+    err = 'fatal'
+    err2 = 'destination path already exists and is not an empty directory.'
+    if err in stderr:
+        if err2 in stderr:
+            return 3     # is cloned
+        return std_neterr(stderr)
+    return False
+
+def std_fetcherr(stderr):
+    err = 'fatal: not a git repository' # 仓库不存在
+    if err in stderr:
+        return True
+    return False
