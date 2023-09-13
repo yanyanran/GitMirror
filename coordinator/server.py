@@ -254,7 +254,7 @@ def read_config_file():
             command = "git clone %s" % repos_url
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             if result.returncode != 0:
-                if common.std_neterr(result.stderr):
+                if common.std_neterr(result.stderr) == 1:
                     print("upstream仓库克隆失败.... ")
                     time.sleep(2)
                     continue
@@ -267,7 +267,7 @@ def read_config_file():
             # 1、网断：隔一段时间反复重试
             # 2、git_url失效：删除原来的本地仓库、重新读取配置文件获取最新url、重新clone
             if result.returncode != 0:
-                if common.std_neterr(result.stdout):
+                if common.std_neterr(result.stdout) == 1:
                     continue
        
         return configMap

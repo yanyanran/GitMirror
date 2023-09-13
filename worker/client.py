@@ -16,6 +16,7 @@ from typing import List
 from queue import PriorityQueue
 import math
 import time
+import re
 
 @dataclass
 class SelfWorker:
@@ -31,51 +32,48 @@ class Task:
         self.pri = 0
         self.task_type = ''
         self.repo_url = ''
+        self.clone_disk_path = ''
         self.clone_fail_cnt = 0
         self.fetch_fail_cnt = 0
         self.step = 0
-        self.STEP_SECONDS = 2592000  # 每个步骤的时间间隔
+        self.STEP_SECONDS = 150000  # 每个步骤的时间间
         self.last_commit_time = 0
-    
-    def get_last_commit_time(self, repo):
-        try:
-            command = f"git -C {repo} log --pretty=format:%ct -1"
-            output = subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL, universal_newlines=True)
-            self.last_commit_time = int(output.strip())  # 将输出的时间戳字符串转换为整数
-            return self.last_commit_time
-        except subprocess.CalledProcessError:   # 处理命令执行失败的情况
-            self.last_commit_time = -1
-            return None
-    
-    def clone_repo(self):
-        print('开始clone...')
-        command = "cd %s && git clone %s" % (self.worker.clone_disk_path, self.repo_url)
+            
+    def clone_repo(self, task_queue):
+        print('开始尝试clone...')
+        command = "cd %s && git clone %s" %(self.clone_disk_path, self.repo_url)
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-                    
+              
         if result.returncode != 0:
-            if common.std_neterr(result.stderr):
-                print("[clone] repo克隆失败.... ")
+            if common.std_neterr(result.stderr) == 1:  # net error
+                print("[clone] repo克隆失败, 稍后重试.... ")
                 self.clone_fail_cnt += 1
-                self.get_task_priority()
-            elif common.std_cloneerr(result.stderr) == 3: # is cloned
+            elif common.std_cloneerr(result.stderr) == 2: # is cloned
                 print("[clone] repo is clone, 开始尝试更新仓库... ")
                 self.task_type = 'git fetch'
-                       
+            elif common.std_cloneerr(result.stderr) == 1: # url无效
+                print('[clone] clone fail: 仓库url无效')
+                return
+        self.get_task_priority()
+        task_queue.put([self.pri, self])   
         print("repo克隆成功! ")
         
-    def fetch_repo(self):
-        command = "cd %s && git fetch %s" % (self.worker.clone_disk_path, self.repo_url)
+    def fetch_repo(self, task_queue):
+        print('start fetch ',self.repo_url)
+        command = "cd %s && git fetch %s" %(self.clone_disk_path, self.repo_url)
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
         if result.returncode != 0:
-            if common.std_fetcherr(result.stderr):
+            if common.std_fetcherr(result.stderr) == 1:
                 print('[fetch] 当前仓库不存在！')
                 return
             # 仓库存在但fetch失败 (重试
             self.fetch_fail_cnt += 1
-            self.get_task_priority()
+        else:
+            print('仓库fetch成功!')
         
-        print('仓库fetch成功!')
+        self.get_task_priority()
+        task_queue.put([self.pri, self])
     
     # 获取优先级
     def get_task_priority(self):
@@ -86,8 +84,7 @@ class Task:
         if self.task_type == 'git clone': # clone task
             self.pri += step  # 默认step
             return
-
-        return self.cal_priority(self)
+        return self.cal_priority()
     
     # [fetch]根据仓库最后一次提交的时间与当前时间的间隔来计算优先级
     def cal_priority(self):
@@ -95,7 +92,7 @@ class Task:
         step = (self.fetch_fail_cnt + 1) * math.pow(self.STEP_SECONDS, 1/3)
         
         if self.last_commit_time == -1:  # time前置获取失败
-            self.get_last_commit_time()
+            WorkerManager.get_last_commit_time(self.repo_url)
         elif self.last_commit_time == 0:  # last_commit_time为零-> 没进行过提交，返回默认step
             self.pri = old_pri + step
             return
@@ -117,8 +114,26 @@ class WorkerManager:
         if "worker" in self.selfdb:
             self.worker = self.selfdb["worker"]
         self.task_queue = PriorityQueue()  # 优先级队列
-
-    # input priqueue
+                
+    def get_last_commit_time(self, repo):
+        try:
+            name = self.get_name_from_repo(repo)
+            command = f"cd {self.worker.clone_disk_path} && git -C {name} log --pretty=format:%ct -1"
+            output = subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL, universal_newlines=True)
+            self.last_commit_time = int(output.strip())  # 将输出的时间戳字符串转换为整数
+            return self.last_commit_time
+        except subprocess.CalledProcessError:   # 处理命令执行失败的情况
+            self.last_commit_time = -1
+            return None
+        
+    # 使用正则表达式从url中提取仓库名
+    def get_name_from_repo(self, git_url):
+        match = re.search(r'/([^/]+?)(?:\.git)?$', git_url)
+        if match:
+            return match.group(1)
+        else:
+            return None
+    
     def add_repo(self, add_repos):
         for v in add_repos:
             if v in self.worker.urls:
@@ -128,34 +143,43 @@ class WorkerManager:
             task = Task()
             task.repo_url = v
             task.task_type = 'git clone'
-            time = task.get_last_commit_time(v)
-            if time == None:
-                print("Git命令执行失败")
-            task.get_task_priority()
-            self.task_queue.put([task.pri, task])
-            
+            task.clone_disk_path = self.worker.clone_disk_path
+            task.pri = 1
+            self.task_queue.put([task.pri, task]) # input priqueue
+        
+        rm_list = []
+        print("开始remove repo...")
         for v in self.worker.urls:
-            if v not in add_repos:
-                print("remove ", v)
-                self.worker.urls.remove(v)
-                # TODO 命令行rm本地仓库、clone/fetch端加入判断（仓库不存在就退出）
+            if v not in add_repos:  # 删除不维护的本地仓库
+                rm_list.append(v)
+        self.del_repo(rm_list)
 
         self.selfdb["worker"] = self.worker # 写磁盘
 
     def del_repo(self, del_repos):
         for v in del_repos:
-            # TODO del、rm
-            print(v)
+            print('remove %s' %v)
+            self.worker.urls.remove(v)
+            repo_name = self.get_name_from_repo(v)
+            command = 'cd %s & rm -rf %s' %(self.worker.clone_disk_path, repo_name)
+            result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            if result.returncode != 0:
+                print('rm repo fail!')         
+            print("rm repo success!")
+
+        self.selfdb["worker"] = self.worker # 写磁盘
     
     # 从priqueue取一个task解析并执行
     def process_tasks(self, thread_pool):
         while True:
+            print(1)
             pri, task = self.task_queue.get()
+            print(2)
             if task.task_type == "git clone":
-                thread_pool.submit(task.clone_repo)
+                thread_pool.submit(task.clone_repo, self.task_queue)
             else:
-                thread_pool.submit(task.fetch_repo)
-            self.task_queue.task_done()
+                thread_pool.submit(task.fetch_repo,self.task_queue)
+           
     
     def heart_beat(self, stub):
         while True:
@@ -196,9 +220,6 @@ class WorkerManager:
             if response.uuid != self.worker.uuid:
                 self.worker.worker_id = response.workerID
                 self.worker.uuid = response.uuid
-                # TODO del old repos前添加一个操作：
-            
-                # TODO DEL old repos
                 self.worker.urls = []
             self.selfdb["worker"] = self.worker
             print('连接coordinator成功! workerID:', self.worker.worker_id, 'uuid:', self.worker.uuid)
@@ -206,7 +227,7 @@ class WorkerManager:
             # 添加线程池(task thread用)
             thread_pool = futures.ThreadPoolExecutor(max_workers=10)
             
-            taskThread = threading.Thread(target=self.process_tasks, args=(stub, thread_pool))
+            taskThread = threading.Thread(target=self.process_tasks, args=(thread_pool, ))
             taskThread.start()
             
             # HeartBeat线程
