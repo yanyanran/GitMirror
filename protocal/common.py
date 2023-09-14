@@ -19,7 +19,7 @@ def std_neterr(stderr):
 # clone-2 ; neterr-1 ; other-0
 def std_cloneerr(stderr):
     err = 'fatal'
-    err2 = 'destination path already exists and is not an empty directory.'
+    err2 = 'already exists and is not an empty directory.'
     err21 = '已经存在，并且不是一个空目录。'
     err3 = 'Could not read from remote repository.'
     if err in stderr:

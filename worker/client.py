@@ -38,7 +38,7 @@ class Task:
         self.step = 0
         self.STEP_SECONDS = 150000  # 每个步骤的时间间
         self.last_commit_time = 0
-            
+        
     def clone_repo(self, task_queue):
         print('开始尝试clone...')
         command = "cd %s && git clone %s" %(self.clone_disk_path, self.repo_url)
@@ -54,6 +54,8 @@ class Task:
             elif common.std_cloneerr(result.stderr) == 1: # url无效
                 print('[clone] clone fail: 仓库url无效')
                 return
+            
+        self.task_type = 'git fetch'   
         self.get_task_priority()
         task_queue.put([self.pri, self])   
         print("repo克隆成功! ")
@@ -114,6 +116,13 @@ class WorkerManager:
         if "worker" in self.selfdb:
             self.worker = self.selfdb["worker"]
         self.task_queue = PriorityQueue()  # 优先级队列
+        for i in  self.worker.urls:
+            task = Task()
+            task.repo_url = i  
+            task.task_type = 'git fetch'
+            task.clone_disk_path = self.worker.clone_disk_path
+            task.pri = 1
+            self.task_queue.put([task.pri, task]) # input priqueue 
                 
     def get_last_commit_time(self, repo):
         try:
@@ -137,7 +146,8 @@ class WorkerManager:
     def add_repo(self, add_repos):
         for v in add_repos:
             if v in self.worker.urls:
-                pass
+                print('[add repo] 存在repo', v)
+                continue
             else:
                 self.worker.urls.append(v)
             task = Task()
@@ -148,9 +158,9 @@ class WorkerManager:
             self.task_queue.put([task.pri, task]) # input priqueue
         
         rm_list = []
-        print("开始remove repo...")
         for v in self.worker.urls:
             if v not in add_repos:  # 删除不维护的本地仓库
+                print("开始remove repo", v)
                 rm_list.append(v)
         self.del_repo(rm_list)
 
@@ -161,10 +171,10 @@ class WorkerManager:
             print('remove %s' %v)
             self.worker.urls.remove(v)
             repo_name = self.get_name_from_repo(v)
-            command = 'cd %s & rm -rf %s' %(self.worker.clone_disk_path, repo_name)
+            command = 'cd %s && rm -rf %s' %(self.worker.clone_disk_path, repo_name)
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             if result.returncode != 0:
-                print('rm repo fail!')         
+                print('rm repo fail!') 
             print("rm repo success!")
 
         self.selfdb["worker"] = self.worker # 写磁盘
@@ -172,13 +182,12 @@ class WorkerManager:
     # 从priqueue取一个task解析并执行
     def process_tasks(self, thread_pool):
         while True:
-            print(1)
-            pri, task = self.task_queue.get()
-            print(2)
-            if task.task_type == "git clone":
-                thread_pool.submit(task.clone_repo, self.task_queue)
-            else:
-                thread_pool.submit(task.fetch_repo,self.task_queue)
+            _, task = self.task_queue.get()
+            if task.repo_url in self.worker.urls:
+                if task.task_type == "git clone":
+                    thread_pool.submit(task.clone_repo, self.task_queue)
+                else:
+                    thread_pool.submit(task.fetch_repo,self.task_queue)
            
     
     def heart_beat(self, stub):

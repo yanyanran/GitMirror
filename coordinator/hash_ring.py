@@ -22,7 +22,7 @@ class HashRing(object):
     def remove_node(self, node):
             for index in range(0, self.virtual_num):
                     node_hash = get_hash("%s_%s" % (node, index))
-                    if node in self.cache_list:
+                    if node_hash in self.cache_list:
                         self.cache_list.remove(node_hash)
                         del self.cache_node[node_hash]
 
