@@ -35,10 +35,11 @@ class UrlsArray:
     del_urls_lock: threading.Lock
 
 class CoordinatorServer:
-    def __init__(self,config_map):
+    def __init__(self, config_map):
         self.BITMAP_MAX_NUM = 1000
         self.HEARTBEAT_INTERVAL = 4
         self.HEARTBEAT_DIEOUT = 8
+        self.FETCH_INTERVAL = 10
         self.bitmap = bitarray(self.BITMAP_MAX_NUM)
         self.workers = {}
         self.urls_cache = {}  # send urls cache
@@ -84,6 +85,29 @@ class CoordinatorServer:
                             repoMap = yaml.load(repo,Loader=yaml.FullLoader)
                             repo_tree[item.name] = repoMap.get("url")    
 
+    def get_new_tree(self):
+        curPath = os.path.dirname(os.path.realpath(__file__))
+        reposPath = os.path.join(curPath, self.config_map.get('upstream_repos_name'))
+        git_tree = {}
+        
+        for i in range(26):
+            letter = chr(i + 97)  # a-z
+            child_reposPath = os.path.join(reposPath, letter)
+            # print(child_reposPath)
+            dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
+            repo_tree = {}
+            git_tree[letter] = repo_tree
+            for item in dir_path.rglob('*'):
+                if item.is_dir():
+                    repoPath = os.path.join(child_reposPath, item.name)  # b/bis
+                    repoPath = os.path.join(repoPath, item.name)  # b/bis/bis
+                    with open(repoPath, 'r', encoding='utf-8') as f:
+                        repo = f.read()
+                        repoMap = yaml.load(repo,Loader=yaml.FullLoader)
+                        repo_tree[item.name] = repoMap.get("url")
+        
+        return git_tree
+    
     # 检查coor本地是否存有worker缓存
     def checkHaveWorkerCache(self):
         with self.db_lock:
@@ -107,13 +131,35 @@ class CoordinatorServer:
             
     def mainLoop_serve(self):
         self.build_git_tree()
-        #print(git_tree.get("a").get("abc"))
         print('git_tree build ok!')
-        print("start mainLoop_serve...")
         self.init_hashring()
         self.hash_distribute_urls()
-        while True:
-            i = 0    
+        print('distribute repo to worker is ok!')
+        
+        while True:  # 定期fetch上游总仓库
+            if self.config_map.get('fetch_interval') != None:
+                self.FETCH_INTERVAL = self.config_map.get('fetch_interval')
+                
+            curPath = os.path.dirname(os.path.realpath(__file__))
+            reposPath = os.path.join(curPath, self.config_map.get('upstream_repos_name'))
+            command = f'cd {reposPath} && git pull'
+            result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            
+            if result.returncode == 0:
+                print('1111111111111111111111')
+                if 'Already up to date.'in result.stdout or  '已经是最新的。' in result.stdout:
+                    print('result.stdout: ', result.stdout)
+                    pass
+                else:
+                    print('已更新上游仓库变动！')
+                    new_tree = self.get_new_tree()
+                    with self.git_tree_lock: 
+                        self.git_tree = new_tree
+                    self.hash_distribute_urls()
+            else:
+                print(f"拉取远程仓库更新失败!")
+                
+            time.sleep(self.FETCH_INTERVAL)
 
     def serve(self, ipaddr):
         heartbeat = threading.Thread(target=self.deal_timeout)
@@ -141,6 +187,7 @@ class CoordinatorServer:
             for i in range(26):
                 letter = chr(i + 97)
                 sub_tree = self.git_tree.get(letter)
+                print(sub_tree)
                 for k, urls in sub_tree.items():
                     for url in urls:
                         nodeID = self.hashring.get_urls_node(k)
@@ -168,7 +215,7 @@ class CoordinatorServer:
             with self.workers_map_lock:
                 tmp_workers = dict(self.workers)
             for v in tmp_workers.values():
-                v.heartBeatStep += 1 # TODO：读写map需加锁（后期维护在coordinator类里）
+                v.heartBeatStep += 1
                 if v.heartBeatStep == self.HEARTBEAT_INTERVAL:
                     print(f"【Worker Timeout】worker {v.worker_id} 连接超时!")
                     v.alive = False
@@ -278,6 +325,6 @@ if __name__ == '__main__':
     server.checkHaveWorkerCache()
     
     serve_startup = threading.Thread(target=server.serve,args=(config_map.get('coor_ip_addr'),))
-
     serve_startup.start()
+    
     server.mainLoop_serve()
