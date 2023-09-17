@@ -187,8 +187,7 @@ class WorkerManager:
                 if task.task_type == "git clone":
                     thread_pool.submit(task.clone_repo, self.task_queue)
                 else:
-                    thread_pool.submit(task.fetch_repo,self.task_queue)
-           
+                    thread_pool.submit(task.fetch_repo,self.task_queue)  
     
     def heart_beat(self, stub):
         while True:
@@ -202,10 +201,11 @@ class WorkerManager:
                 time.sleep(5)
             except grpc.RpcError as e:
                 if e.code() == grpc.StatusCode.UNAVAILABLE:
-                    break
+                    print('检测到coordinator挂机!')
+                    sys.exit(0)
                 else:
                     print(f"gRPC Error: {e.details()}")
-                    break
+                    sys.exit(0)
 
     @staticmethod
     def read_config_file():
@@ -235,15 +235,10 @@ class WorkerManager:
             
             # 添加线程池(task thread用)
             thread_pool = futures.ThreadPoolExecutor(max_workers=10)
-            
             taskThread = threading.Thread(target=self.process_tasks, args=(thread_pool, ))
             taskThread.start()
-            
-            # HeartBeat线程
-            heartbeat = threading.Thread(target=self.heart_beat, args=(stub, ))
-            heartbeat.start()
-            while True:
-                pass
+
+            self.heart_beat(stub)
             
         except grpc.RpcError as e:  # 处理gRPC异常
             if e.code() == grpc.StatusCode.UNAVAILABLE: # 服务器未启动

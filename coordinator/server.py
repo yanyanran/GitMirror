@@ -18,6 +18,7 @@ sys.path.append('../protocal/')  # TODO：路径启动过于绝对
 import func_pb2
 import func_pb2_grpc
 import common
+from flask import Flask, request, jsonify
 
 @dataclass
 class Worker:
@@ -50,7 +51,7 @@ class CoordinatorServer:
         self.git_tree_lock = threading.Lock()
         self.workers_map_lock = threading.Lock()
         self.config_map = config_map
-
+    
     def get_free_id(self):
         for i, allocated in enumerate(self.bitmap):
             if not allocated:
@@ -72,7 +73,6 @@ class CoordinatorServer:
             for i in range(26):
                 letter = chr(i + 97)  # a-z
                 child_reposPath = os.path.join(reposPath, letter)
-                # print(child_reposPath)
                 dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
                 repo_tree = {}
                 self.git_tree[letter] = repo_tree
@@ -93,7 +93,6 @@ class CoordinatorServer:
         for i in range(26):
             letter = chr(i + 97)  # a-z
             child_reposPath = os.path.join(reposPath, letter)
-            # print(child_reposPath)
             dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
             repo_tree = {}
             git_tree[letter] = repo_tree
@@ -123,6 +122,7 @@ class CoordinatorServer:
                     self.bitmap[v.worker_id] = True
                     array = UrlsArray(add_urls=[], del_urls=[],add_urls_lock= threading.Lock(),del_urls_lock= threading.Lock())
                     self.urls_cache[v.worker_id] = array 
+            # time.sleep(600)
         
     def init_hashring(self):
          for value in self.workers.values():
@@ -135,7 +135,7 @@ class CoordinatorServer:
         self.init_hashring()
         self.hash_distribute_urls()
         print('distribute repo to worker is ok!')
-        
+        app.run(host='0.0.0.0', port=8099)
         while True:  # 定期fetch上游总仓库
             if self.config_map.get('fetch_interval') != None:
                 self.FETCH_INTERVAL = self.config_map.get('fetch_interval')
@@ -146,7 +146,6 @@ class CoordinatorServer:
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             
             if result.returncode == 0:
-                print('1111111111111111111111')
                 if 'Already up to date.'in result.stdout or  '已经是最新的。' in result.stdout:
                     print('result.stdout: ', result.stdout)
                     pass
@@ -179,7 +178,7 @@ class CoordinatorServer:
             server.stop(0)
 
 # 根据hashring, 遍历git_tree开始分配url到每个worker的cache上
-# TODO 后续：(add)upstream repo有更新，增/减repo
+# 后续：(add)upstream repo有更新，增/减repo
 #           有worker挂掉，将repo分配给其他worker
 #           (del)有worker恢复
     def hash_distribute_urls(self):
@@ -187,7 +186,6 @@ class CoordinatorServer:
             for i in range(26):
                 letter = chr(i + 97)
                 sub_tree = self.git_tree.get(letter)
-                print(sub_tree)
                 for k, urls in sub_tree.items():
                     for url in urls:
                         nodeID = self.hashring.get_urls_node(k)
@@ -225,7 +223,7 @@ class CoordinatorServer:
                     self.hash_distribute_urls()
                     self.release_id(v.worker_id)
                     with self.workers_map_lock:
-                        self.workers.pop(v.worker_id)    # TODO: worker全局不delete
+                        self.workers.pop(v.worker_id)
                     with self.db_lock:
                         del self.workers_db[str(v.worker_id)]
                     del self.urls_cache[v.worker_id]
@@ -318,6 +316,33 @@ def read_config_file():
                     continue
        
         return configMap
+
+app = Flask(__name__)
+
+# HTTP路由，用于向外部暴露一个接口
+@app.route("/api/status", methods=["GET"])
+def get_status():
+    # 获取状态信息 e.g. app.run(host='0.0.0.0', port=8089)-> http://localhost:8089/api/status
+    urlMap = {}
+    for k,_ in server.workers.items():
+        urlMap[k] = []
+    with server.git_tree_lock:
+        for i in range(26):
+            letter = chr(i + 97)
+            sub_tree = server.git_tree.get(letter, {})
+            for _, urls in sub_tree.items():
+                for url in urls:
+                    id=server.hashring.get_urls_node(url)
+                    if id==-1 :
+                        return
+                    urlMap[id].append(url)
+
+    status_info = {
+        "server_status": "running",
+        "worker_count": len(server.workers),
+        "worker:url": urlMap,
+    }
+    return jsonify(status_info)
 
 if __name__ == '__main__':
     config_map = read_config_file()
