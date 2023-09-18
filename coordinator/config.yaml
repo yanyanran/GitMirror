@@ -1,4 +1,4 @@
-coor_ip_addr: 127.0.0.1:5555
+coor_ip_addr: 172.19.0.1:5555
 
 upstream_repos_name: upstream-repos-test
 upstream_repos_url: https://github.com/yanyanran/upstream-repos-test.git

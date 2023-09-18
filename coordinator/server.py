@@ -135,7 +135,7 @@ class CoordinatorServer:
         self.init_hashring()
         self.hash_distribute_urls()
         print('distribute repo to worker is ok!')
-        app.run(host='0.0.0.0', port=8099)
+        
         while True:  # 定期fetch上游总仓库
             if self.config_map.get('fetch_interval') != None:
                 self.FETCH_INTERVAL = self.config_map.get('fetch_interval')
