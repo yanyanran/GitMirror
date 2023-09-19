@@ -16,7 +16,8 @@ from typing import List
 from queue import PriorityQueue
 import math
 import time
-import re
+
+# TODO 检测磁盘状态
 
 @dataclass
 class SelfWorker:
@@ -126,21 +127,13 @@ class WorkerManager:
                 
     def get_last_commit_time(self, repo):
         try:
-            name = self.get_name_from_repo(repo)
+            name = common.get_name_from_repo(repo)
             command = f"cd {self.worker.clone_disk_path} && git -C {name} log --pretty=format:%ct -1"
             output = subprocess.check_output(command, shell=True, stderr=subprocess.DEVNULL, universal_newlines=True)
             self.last_commit_time = int(output.strip())  # 将输出的时间戳字符串转换为整数
             return self.last_commit_time
         except subprocess.CalledProcessError:   # 处理命令执行失败的情况
             self.last_commit_time = -1
-            return None
-        
-    # 使用正则表达式从url中提取仓库名
-    def get_name_from_repo(self, git_url):
-        match = re.search(r'/([^/]+?)(?:\.git)?$', git_url)
-        if match:
-            return match.group(1)
-        else:
             return None
     
     def add_repo(self, add_repos):
@@ -170,7 +163,7 @@ class WorkerManager:
         for v in del_repos:
             print('remove %s' %v)
             self.worker.urls.remove(v)
-            repo_name = self.get_name_from_repo(v)
+            repo_name = common.get_name_from_repo(v)
             command = 'cd %s && rm -rf %s' %(self.worker.clone_disk_path, repo_name)
             result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
             if result.returncode != 0:

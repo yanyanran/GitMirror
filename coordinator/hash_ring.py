@@ -34,6 +34,8 @@ class HashRing(object):
                 return -1
             index = index % len(self.cache_list)  # 若比最大的node hash还大，分发给第一个node
             return self.cache_node[self.cache_list[index]]
+
+     
         
 def test():
     a = HashRing()

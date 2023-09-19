@@ -1,3 +1,5 @@
+import re
+
 # 心跳事件类型
 NO_MORE = 0
 ADD_DEL_REPO = 1
@@ -34,3 +36,11 @@ def std_fetcherr(stderr):
     if err in stderr:
         return 1
     return 0
+
+# 使用正则表达式从url中提取仓库名
+def get_name_from_repo(git_url):
+    match = re.search(r'/([^/]+?)(?:\.git)?$', git_url)
+    if match:
+        return match.group(1)
+    else:
+        return None

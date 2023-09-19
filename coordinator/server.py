@@ -14,12 +14,11 @@ from typing import List
 from bitarray import bitarray
 import hash_ring
 import sys
-sys.path.append('../protocal/')  # TODO：路径启动过于绝对
+sys.path.append('../protocal/')
 import func_pb2
 import func_pb2_grpc
 import common
 from flask import Flask, request, jsonify
-
 @dataclass
 class Worker:
     worker_id: int
@@ -67,43 +66,53 @@ class CoordinatorServer:
 
     def build_git_tree(self):
         curPath = os.path.dirname(os.path.realpath(__file__))
-        reposPath = os.path.join(curPath, self.config_map.get('upstream_repos_name'))
         
-        with self.git_tree_lock:
-            for i in range(26):
-                letter = chr(i + 97)  # a-z
-                child_reposPath = os.path.join(reposPath, letter)
-                dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
-                repo_tree = {}
-                self.git_tree[letter] = repo_tree
-                for item in dir_path.rglob('*'):
-                    if item.is_dir():
-                        repoPath = os.path.join(child_reposPath, item.name)  # b/bis
-                        repoPath = os.path.join(repoPath, item.name)  # b/bis/bis
-                        with open(repoPath, 'r', encoding='utf-8') as f:
-                            repo = f.read()
-                            repoMap = yaml.load(repo,Loader=yaml.FullLoader)
-                            repo_tree[item.name] = repoMap.get("url")    
+        for url in self.config_map.get('upstream_repos_urls'):
+            repo_name = common.get_name_from_repo(url)
+            reposPath = os.path.join(curPath, repo_name)
+            with self.git_tree_lock:
+                for _, dirs, _ in os.walk(reposPath):
+                    for directory in dirs:
+                        if directory.startswith('.'):
+                            continue
+                        repo_tree = {}
+                        self.git_tree[directory] = repo_tree
+                        path = os.path.join(reposPath, directory)
+                        for _, dirs, _ in os.walk(path):
+                            for directory in dirs:
+                                path1 = os.path.join(path, directory)
+                                path1 = os.path.join(path1, directory)
+                                with open(path1, 'r', encoding='utf-8') as f:
+                                    repo = f.read()
+                                    repoMap = yaml.load(repo,Loader=yaml.FullLoader)
+                                    repo_tree[directory] = repoMap.get("url")
+                            break
+                    break
 
     def get_new_tree(self):
         curPath = os.path.dirname(os.path.realpath(__file__))
-        reposPath = os.path.join(curPath, self.config_map.get('upstream_repos_name'))
         git_tree = {}
         
-        for i in range(26):
-            letter = chr(i + 97)  # a-z
-            child_reposPath = os.path.join(reposPath, letter)
-            dir_path = pathlib.Path(child_reposPath) # 指定要遍历的文件目录路径
-            repo_tree = {}
-            git_tree[letter] = repo_tree
-            for item in dir_path.rglob('*'):
-                if item.is_dir():
-                    repoPath = os.path.join(child_reposPath, item.name)  # b/bis
-                    repoPath = os.path.join(repoPath, item.name)  # b/bis/bis
-                    with open(repoPath, 'r', encoding='utf-8') as f:
-                        repo = f.read()
-                        repoMap = yaml.load(repo,Loader=yaml.FullLoader)
-                        repo_tree[item.name] = repoMap.get("url")
+        for url in self.config_map.get('upstream_repos_urls'):
+            repo_name = common.get_name_from_repo(url)
+            reposPath = os.path.join(curPath, repo_name)
+            for _, dirs, _ in os.walk(reposPath):
+                for directory in dirs:
+                    if directory.startswith('.'):
+                        continue
+                    repo_tree = {}
+                    self.git_tree[directory] = repo_tree
+                    path = os.path.join(reposPath, directory)
+                    for _, dirs, _ in os.walk(path):
+                        for directory in dirs:
+                            path1 = os.path.join(path, directory)
+                            path1 = os.path.join(path1, directory)
+                            with open(path1, 'r', encoding='utf-8') as f:
+                                repo = f.read()
+                                repoMap = yaml.load(repo,Loader=yaml.FullLoader)
+                                repo_tree[directory] = repoMap.get("url")
+                        break
+                break
         
         return git_tree
     
@@ -140,25 +149,27 @@ class CoordinatorServer:
             if self.config_map.get('fetch_interval') != None:
                 self.FETCH_INTERVAL = self.config_map.get('fetch_interval')
                 
-            curPath = os.path.dirname(os.path.realpath(__file__))
-            reposPath = os.path.join(curPath, self.config_map.get('upstream_repos_name'))
-            command = f'cd {reposPath} && git pull'
-            result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            
-            if result.returncode == 0:
-                if 'Already up to date.'in result.stdout or  '已经是最新的。' in result.stdout:
-                    print('result.stdout: ', result.stdout)
-                    pass
-                else:
-                    print('已更新上游仓库变动！')
-                    new_tree = self.get_new_tree()
-                    with self.git_tree_lock: 
-                        self.git_tree = new_tree
-                    self.hash_distribute_urls()
-            else:
-                print(f"拉取远程仓库更新失败!")
+            for url in self.config_map.get('upstream_repos_urls'):    
+                curPath = os.path.dirname(os.path.realpath(__file__))
+                repo_name = common.get_name_from_repo(url)
+                reposPath = os.path.join(curPath, repo_name)
+                command = f'cd {reposPath} && git pull'
+                result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
                 
-            time.sleep(self.FETCH_INTERVAL)
+                if result.returncode == 0:
+                    if 'Already up to date.'in result.stdout or  '已经是最新的。' in result.stdout:
+                        print('result.stdout: ', result.stdout)
+                        pass
+                    else:
+                        print('已更新上游仓库变动！')
+                        new_tree = self.get_new_tree()
+                        with self.git_tree_lock: 
+                            self.git_tree = new_tree
+                        self.hash_distribute_urls()
+                else:
+                    print(f"拉取远程仓库更新失败!")
+                    
+                time.sleep(self.FETCH_INTERVAL)
 
     def serve(self, ipaddr):
         heartbeat = threading.Thread(target=self.deal_timeout)
@@ -183,9 +194,7 @@ class CoordinatorServer:
 #           (del)有worker恢复
     def hash_distribute_urls(self):
         with self.git_tree_lock:
-            for i in range(26):
-                letter = chr(i + 97)
-                sub_tree = self.git_tree.get(letter)
+            for _, sub_tree in self.git_tree.items():
                 for k, urls in sub_tree.items():
                     for url in urls:
                         nodeID = self.hashring.get_urls_node(k)
@@ -197,9 +206,7 @@ class CoordinatorServer:
     # 每次重连，coor向worker发送所属worker维护的urls                      
     def send_hash_urls(self, workerID):
         with self.git_tree_lock:
-            for i in range(26):
-                letter = chr(i + 97)
-                sub_tree = self.git_tree.get(letter)
+            for _, sub_tree in self.git_tree.items():
                 for k, urls in sub_tree.items():
                     for url in urls:
                         nodeID = self.hashring.get_urls_node(k)
@@ -288,34 +295,40 @@ def read_config_file():
         config = f.read()
         
     configMap = yaml.load(config,Loader=yaml.FullLoader)
-    repos_name = configMap.get('upstream_repos_name')
-    repos_url = configMap.get('upstream_repos_url')
+    repo_list = configMap.get('upstream_repos_urls')
 
-    # 获取绝对路径
-    reposPath = os.path.join(curPath, repos_name)
-    while True:
-        if os.path.exists(reposPath) == False:
-            print("upsteam仓库不存在!")
-            command = "git clone %s" % repos_url
-            result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            if result.returncode != 0:
-                if common.std_neterr(result.stderr) == 1:
-                    print("upstream仓库克隆失败.... ")
-                    time.sleep(2)
-                    continue
-            print("upstream仓库克隆成功! ")
-        else:
-            print("upsteam仓库存在!")
-            command = "cd %s && git pull" % reposPath
-            result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-            # git pull错误情况解析判断
-            # 1、网断：隔一段时间反复重试
-            # 2、git_url失效：删除原来的本地仓库、重新读取配置文件获取最新url、重新clone
-            if result.returncode != 0:
-                if common.std_neterr(result.stdout) == 1:
-                    continue
-       
-        return configMap
+    for url in repo_list:
+        repos_name = common.get_name_from_repo(url)
+
+        # 获取绝对路径
+        reposPath = os.path.join(curPath, repos_name)
+        i = 0
+        while True:
+            i = i + 1
+            if i > 50:
+                print('当前有仓库尝试克隆50次失败! 请检查url是否正确!')
+            if os.path.exists(reposPath) == False:
+                print("upsteam仓库不存在!")
+                command = "git clone %s" % url
+                result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                if result.returncode != 0:
+                    if common.std_neterr(result.stderr) == 1:
+                        print("upstream仓库克隆失败.... ")
+                        time.sleep(2)
+                        continue
+                print("upstream仓库克隆成功! ")
+            else:
+                print("upsteam仓库存在!")
+                command = "cd %s && git pull" % reposPath
+                result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+                # git pull错误情况解析判断
+                # 1、网断：隔一段时间反复重试
+                # 2、git_url失效：删除原来的本地仓库、重新读取配置文件获取最新url、重新clone
+                if result.returncode != 0:
+                    if common.std_neterr(result.stdout) == 1:
+                        continue
+        
+            return configMap
 
 app = Flask(__name__)
 
@@ -327,9 +340,7 @@ def get_status():
     for k,_ in server.workers.items():
         urlMap[k] = []
     with server.git_tree_lock:
-        for i in range(26):
-            letter = chr(i + 97)
-            sub_tree = server.git_tree.get(letter, {})
+        for _, sub_tree in server.git_tree.items():
             for _, urls in sub_tree.items():
                 for url in urls:
                     id=server.hashring.get_urls_node(url)

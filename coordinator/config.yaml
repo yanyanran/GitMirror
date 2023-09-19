@@ -1,7 +1,7 @@
 coor_ip_addr: 172.19.0.1:5555
 
-upstream_repos_name: upstream-repos-test
-upstream_repos_url: https://github.com/yanyanran/upstream-repos-test.git
+upstream_repos_urls: 
+- https://github.com/yanyanran/upstream-repos-test.git
 fetch_interval: 10
 
 bitmap_max_num: 100
