@@ -211,7 +211,7 @@ class WorkerManager:
 
     def connect_to_coordinator(self, config_map):
         try:
-            coor_ip_addr = config_map.get('where_coor_ip_addr')
+            coor_ip_addr = config_map.get('where_coor_ip') + config_map.get('where_coor_port')
             clone_disk_path = config_map.get('clone_disk_path')
             if not os.path.exists(clone_disk_path):
                 os.makedirs(clone_disk_path)

@@ -285,16 +285,8 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
 
         return func_pb2.HeartBeatResponse(status=common.ADD_DEL_REPO,add_repos=add_arr,del_repos=del_arr)
 
-# 读取配置文件               
-def read_config_file():
-    print('start read config file...')
+def download_upstream_repo(configMap):
     curPath = os.path.dirname(os.path.realpath(__file__))
-    yamlPath = os.path.join(curPath, "config.yaml")
-    
-    with open(yamlPath, 'r', encoding='utf-8') as f:
-        config = f.read()
-        
-    configMap = yaml.load(config,Loader=yaml.FullLoader)
     repo_list = configMap.get('upstream_repos_urls')
 
     for url in repo_list:
@@ -327,8 +319,18 @@ def read_config_file():
                 if result.returncode != 0:
                     if common.std_neterr(result.stdout) == 1:
                         continue
-        
-            return configMap
+
+# 读取配置文件               
+def read_config_file():
+    print('start read config file...')
+    curPath = os.path.dirname(os.path.realpath(__file__))
+    yamlPath = os.path.join(curPath, "config.yaml")
+    
+    with open(yamlPath, 'r', encoding='utf-8') as f:
+        config = f.read()
+    configMap = yaml.load(config,Loader=yaml.FullLoader)
+      
+    return configMap
 
 app = Flask(__name__)
 
@@ -357,10 +359,12 @@ def get_status():
 
 if __name__ == '__main__':
     config_map = read_config_file()
+    download_upstream_repo(config_map)
     server = CoordinatorServer(config_map)
     server.checkHaveWorkerCache()
     
-    serve_startup = threading.Thread(target=server.serve,args=(config_map.get('coor_ip_addr'),))
+    addr = config_map.get('coor_ip_addr') + config_map.get('coor_port')
+    serve_startup = threading.Thread(target=server.serve,args=(addr,))
     serve_startup.start()
     
     server.mainLoop_serve()
