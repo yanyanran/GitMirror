@@ -4,6 +4,7 @@ syntax = "proto3";
 service Coordinator {
     rpc SayHello(HelloRequest) returns (HelloResponse) {}
     rpc HeartBeat(HeartBeatRequest) returns (HeartBeatResponse) {}
+    rpc DiskFull(DiskFullRequest) returns (DiskFullResponse) {}
 }
 
 message HelloRequest {   // worker-> server
@@ -25,4 +26,12 @@ message HeartBeatResponse {
     int32 status = 1;  // 0-无事发生，1-add/del repo
     repeated string add_repos = 2;  // 数组
     repeated string del_repos = 3;
+    repeated string dump_repos = 4;
+}
+
+message DiskFullRequest {
+    string dump_repo = 1;
+}
+
+message DiskFullResponse {
 }

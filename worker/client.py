@@ -17,8 +17,6 @@ from queue import PriorityQueue
 import math
 import time
 
-# TODO 检测磁盘状态
-
 @dataclass
 class SelfWorker:
     worker_id: int
@@ -40,7 +38,23 @@ class Task:
         self.STEP_SECONDS = 150000  # 每个步骤的时间间
         self.last_commit_time = 0
         
-    def clone_repo(self, task_queue):
+    def check_disk_utilization(self):
+        statvfs = os.statvfs('/')
+        total_disk_space = statvfs.f_frsize * statvfs.f_blocks
+        free_disk_space = statvfs.f_frsize * statvfs.f_bfree
+        
+        disk_usage = int((total_disk_space - free_disk_space) * 100.0 / total_disk_space)
+        print(disk_tip = "[clone repo] 当前机器的磁盘空间使用率为" + str(disk_usage) + "%")
+        if disk_usage >= 98:
+            print("磁盘空间即将不足，为了工作的正常运行，此机器将不再响应新仓库的到来！")
+            return True
+        return False
+        
+    def clone_repo(self, task_queue, stub):
+        isFull = self.check_disk_utilization()
+        if isFull == True:  # 磁盘空间不够，通知coordinator将此仓库交由其他worker处理
+            stub.DiskFull(func_pb2.DiskFullRequest(self.repo_url))
+        
         print('开始尝试clone...')
         command = "cd %s && git clone %s" %(self.clone_disk_path, self.repo_url)
         result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
@@ -171,14 +185,30 @@ class WorkerManager:
             print("rm repo success!")
 
         self.selfdb["worker"] = self.worker # 写磁盘
+        
+    def dump_repo(self, dump_repos):
+        for v in dump_repos:
+            if v in self.worker.urls:
+                print('[dump repo] 存在repo', v)
+                continue
+            else:
+                self.worker.urls.append(v)
+            task = Task()
+            task.repo_url = v
+            task.task_type = 'git clone'
+            task.clone_disk_path = self.worker.clone_disk_path
+            task.pri = 1
+            self.task_queue.put([task.pri, task]) # input priqueue
+            
+        self.selfdb["worker"] = self.worker # 写磁盘
     
     # 从priqueue取一个task解析并执行
-    def process_tasks(self, thread_pool):
+    def process_tasks(self, thread_pool, stub):
         while True:
             _, task = self.task_queue.get()
             if task.repo_url in self.worker.urls:
                 if task.task_type == "git clone":
-                    thread_pool.submit(task.clone_repo, self.task_queue)
+                    thread_pool.submit(task.clone_repo, self.task_queue, stub)
                 else:
                     thread_pool.submit(task.fetch_repo,self.task_queue)  
     
@@ -191,6 +221,8 @@ class WorkerManager:
                         self.add_repo(res.add_repos)
                     if res.del_repos:
                         self.del_repo(res.del_repos)
+                    if res.dump_repos:
+                        self.dump_repo(res.del_repos)
                 time.sleep(5)
             except grpc.RpcError as e:
                 if e.code() == grpc.StatusCode.UNAVAILABLE:
@@ -228,7 +260,7 @@ class WorkerManager:
             
             # 添加线程池(task thread用)
             thread_pool = futures.ThreadPoolExecutor(max_workers=10)
-            taskThread = threading.Thread(target=self.process_tasks, args=(thread_pool, ))
+            taskThread = threading.Thread(target=self.process_tasks, args=(thread_pool, stub,))
             taskThread.start()
 
             self.heart_beat(stub)

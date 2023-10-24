@@ -33,6 +33,9 @@ class UrlsArray:
     del_urls: List[str]
     add_urls_lock: threading.Lock
     del_urls_lock: threading.Lock
+    
+    dump_add_again_url: List[str]
+    dump_add_again_url_lock: threading.Lock
 
 class CoordinatorServer:
     def __init__(self, config_map):
@@ -129,7 +132,7 @@ class CoordinatorServer:
                     with self.workers_map_lock:
                         self.workers[v.worker_id] = v
                     self.bitmap[v.worker_id] = True
-                    array = UrlsArray(add_urls=[], del_urls=[],add_urls_lock= threading.Lock(),del_urls_lock= threading.Lock())
+                    array = UrlsArray(add_urls=[], del_urls=[],add_urls_lock= threading.Lock(),del_urls_lock= threading.Lock(),dump_add_again_url=[],dump_add_again_url_lock=threading.Lock())   
                     self.urls_cache[v.worker_id] = array 
             # time.sleep(600)
         
@@ -258,7 +261,7 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
             
             worker = Worker(worker_id = id, heartBeatStep = 0, alive = True, uuid = str(uuid.uuid1()), urls=[])
             self.server.workers[id] = worker
-        array = UrlsArray(add_urls=[], del_urls=[],add_urls_lock= threading.Lock(),del_urls_lock= threading.Lock())
+        array = UrlsArray(add_urls=[], del_urls=[],add_urls_lock= threading.Lock(),del_urls_lock= threading.Lock(),dump_add_again_url=[],dump_add_again_url_lock=threading.Lock())
         self.server.urls_cache[id] = array 
             
         print("worker[%d]已连接!" %id)
@@ -275,15 +278,26 @@ class Coordinator(func_pb2_grpc.CoordinatorServicer):
         worker.heartBeatStep = 0
         worker.alive = True
         with self.server.urls_cache[request.workerID].add_urls_lock:
-            with self.server.urls_cache[request.workerID].del_urls_lock:
-                add_arr =  list(self.server.urls_cache[request.workerID].add_urls)
-                del_arr =  list(self.server.urls_cache[request.workerID].del_urls)
-                self.server.urls_cache[request.workerID].add_urls.clear()
-                self.server.urls_cache[request.workerID].del_urls.clear()
+            add_arr = list(self.server.urls_cache[request.workerID].add_urls)
+            self.server.urls_cache[request.workerID].add_urls.clear()
+        with self.server.urls_cache[request.workerID].del_urls_lock:
+            del_arr = list(self.server.urls_cache[request.workerID].del_urls)
+            self.server.urls_cache[request.workerID].del_urls.clear()
+        with self.server.urls_cache[request.workerID].dump_add_again_url_lock:
+            dump_arr = list(self.server.urls_cache[request.workerID].dump_add_again_url)
+            self.server.urls_cache[request.workerID].dump_add_again_url.clear()
+        
         if not add_arr and not del_arr :
-            return func_pb2.HeartBeatResponse(status=0,add_repos=add_arr,del_repos=del_arr)
+            return func_pb2.HeartBeatResponse(status=0,add_repos=add_arr,del_repos=del_arr,dump_repos=dump_arr)
 
-        return func_pb2.HeartBeatResponse(status=common.ADD_DEL_REPO,add_repos=add_arr,del_repos=del_arr)
+        return func_pb2.HeartBeatResponse(status=common.ADD_DEL_REPO,add_repos=add_arr,del_repos=del_arr,dump_repos=dump_arr)
+    
+    def DiskFull(self, request, context):
+        print(request.dump_repo + "仓库因磁盘原因被退回, 准备重新分配给其他worker维护...")
+        url = request.dump_repo + "+yrd"   # 重新计算md5 重新匹配worker
+        nodeID = self.server.hashring.get_urls_node(url)
+        with self.urls_cache[nodeID].add_urls_lock:
+            self.urls_cache[nodeID].dump_add_again_url.append(request.dump_repo) 
 
 def download_upstream_repo(configMap):
     curPath = os.path.dirname(os.path.realpath(__file__))
